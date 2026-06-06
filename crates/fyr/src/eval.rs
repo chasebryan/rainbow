@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Param, Program, Statement, UnaryOp};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::span::Span;
 
@@ -16,7 +16,7 @@ pub enum Value {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub body: Vec<Statement>,
 }
 
@@ -40,8 +40,14 @@ pub struct RunResult {
 
 #[derive(Debug, Clone)]
 pub struct Evaluator {
-    scopes: Vec<HashMap<String, Value>>,
+    scopes: Vec<HashMap<String, Binding>>,
     outputs: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct Binding {
+    value: Value,
+    mutable: bool,
 }
 
 impl Evaluator {
@@ -53,6 +59,8 @@ impl Evaluator {
     }
 
     pub fn run(mut self, program: &Program) -> FyrResult<RunResult> {
+        self.predefine_functions(&program.statements);
+
         let mut last_value = Value::Unit;
 
         for statement in &program.statements {
@@ -69,21 +77,50 @@ impl Evaluator {
         match statement {
             Statement::Let { name, value } => {
                 let value = self.eval_expr(value)?;
-                self.define(name, value.clone());
-                Ok(value)
-            }
-            Statement::Fn { name, params, body } => {
-                self.define(
-                    name,
-                    Value::Function(Function {
-                        params: params.clone(),
-                        body: body.clone(),
-                    }),
-                );
+                self.define(name, value, false);
                 Ok(Value::Unit)
             }
+            Statement::Var { name, value } => {
+                let value = self.eval_expr(value)?;
+                self.define(name, value, true);
+                Ok(Value::Unit)
+            }
+            Statement::Assign { name, value } => {
+                let value = self.eval_expr(value)?;
+                self.assign(name, value)?;
+                Ok(Value::Unit)
+            }
+            Statement::Fn {
+                name, params, body, ..
+            } => {
+                self.define_function(name, params, body);
+                Ok(Value::Unit)
+            }
+            Statement::While { condition, body } => self.eval_while(condition, body),
             Statement::Expr(expr) => self.eval_expr(expr),
         }
+    }
+
+    fn predefine_functions(&mut self, statements: &[Statement]) {
+        for statement in statements {
+            if let Statement::Fn {
+                name, params, body, ..
+            } = statement
+            {
+                self.define_function(name, params, body);
+            }
+        }
+    }
+
+    fn define_function(&mut self, name: &str, params: &[Param], body: &[Statement]) {
+        self.define(
+            name,
+            Value::Function(Function {
+                params: params.to_vec(),
+                body: body.to_vec(),
+            }),
+            false,
+        );
     }
 
     fn eval_expr(&mut self, expr: &Expr) -> FyrResult<Value> {
@@ -233,7 +270,7 @@ impl Evaluator {
 
         self.push_scope();
         for (param, value) in function.params.iter().zip(values) {
-            self.define(param, value);
+            self.define(&param.name, value, false);
         }
         let result = self.eval_block(&function.body);
         self.pop_scope();
@@ -250,6 +287,18 @@ impl Evaluator {
             Value::Bool(true) => self.eval_block_scoped(then_branch),
             Value::Bool(false) => self.eval_block_scoped(else_branch),
             other => type_error("bool", &other),
+        }
+    }
+
+    fn eval_while(&mut self, condition: &Expr, body: &[Statement]) -> FyrResult<Value> {
+        loop {
+            match self.eval_expr(condition)? {
+                Value::Bool(true) => {
+                    self.eval_block_scoped(body)?;
+                }
+                Value::Bool(false) => return Ok(Value::Unit),
+                other => return type_error("bool", &other),
+            }
         }
     }
 
@@ -274,15 +323,35 @@ impl Evaluator {
         std::mem::take(&mut self.outputs)
     }
 
-    fn define(&mut self, name: &str, value: Value) {
+    fn define(&mut self, name: &str, value: Value, mutable: bool) {
         self.scopes
             .last_mut()
             .expect("evaluator always has a scope")
-            .insert(name.to_owned(), value);
+            .insert(name.to_owned(), Binding { value, mutable });
+    }
+
+    fn assign(&mut self, name: &str, value: Value) -> FyrResult<()> {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(binding) = scope.get_mut(name) {
+                if !binding.mutable {
+                    return Err(runtime_error(format!(
+                        "cannot assign to immutable binding '{name}'"
+                    )));
+                }
+
+                binding.value = value;
+                return Ok(());
+            }
+        }
+
+        Err(runtime_error(format!("unknown binding '{name}'")))
     }
 
     fn lookup(&self, name: &str) -> Option<&Value> {
-        self.scopes.iter().rev().find_map(|scope| scope.get(name))
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).map(|binding| &binding.value))
     }
 
     fn push_scope(&mut self) {
@@ -360,7 +429,7 @@ mod tests {
     #[test]
     fn calls_recursive_functions() {
         let result = run(r#"
-fn fib(n):
+fn fib(n: i64) -> i64:
     if n < 2:
         n
     else:
@@ -374,10 +443,24 @@ fib(10)
     }
 
     #[test]
+    fn resolves_forward_function_calls() {
+        let result = run(r#"
+print(double(21))
+
+fn double(n: i64) -> i64:
+    n * 2
+"#)
+        .expect("forward function call should run");
+
+        assert_eq!(result.outputs, vec!["42"]);
+        assert_eq!(result.last_value, Value::Unit);
+    }
+
+    #[test]
     fn keeps_function_locals_scoped() {
         let result = run(r#"
 let x = 1
-fn shadow():
+fn shadow() -> i64:
     let x = 41
     x + 1
 
@@ -386,5 +469,21 @@ shadow() + x
         .expect("scoped function should run");
 
         assert_eq!(result.last_value, Value::Int(43));
+    }
+
+    #[test]
+    fn runs_while_loop_with_mutation() {
+        let result = run(r#"
+var total = 0
+var i = 1
+while i <= 5:
+    total = total + i
+    i = i + 1
+
+total
+"#)
+        .expect("loop should run");
+
+        assert_eq!(result.last_value, Value::Int(15));
     }
 }

@@ -31,7 +31,7 @@ fn fib(n: i64) -> i64:
         fib(n - 1) + fib(n - 2)
 ```
 
-The bootstrap implementation now supports Python-style indented function bodies and expression-style `if` / `else` branches. Type annotations, declared returns, ownership, and native code generation remain upcoming compiler layers.
+The bootstrap implementation now supports typed function signatures, explicit mutable `var` bindings, static checks for calls and primitive operations, Python-style indented blocks, expression-style `if` / `else` branches, and `while` loops. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
 
 ## Toolchain Direction
 

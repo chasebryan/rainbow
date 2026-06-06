@@ -1,0 +1,10 @@
+# Explicit mutation with var and while.
+var total = 0
+var i = 1
+
+while i <= 100:
+    total = total + i
+    i = i + 1
+
+print(total)
+

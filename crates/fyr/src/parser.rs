@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Statement, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::lexer::{Token, TokenKind};
 
@@ -33,8 +33,20 @@ impl<'a> Parser<'a> {
             return self.let_statement();
         }
 
+        if self.match_kind(&TokenKind::Var) {
+            return self.var_statement();
+        }
+
         if self.match_kind(&TokenKind::Fn) {
             return self.fn_statement();
+        }
+
+        if self.match_kind(&TokenKind::While) {
+            return self.while_statement();
+        }
+
+        if self.check_identifier_assignment() {
+            return self.assignment_statement();
         }
 
         Ok(Statement::Expr(self.expression()?))
@@ -57,6 +69,35 @@ impl<'a> Parser<'a> {
         Ok(Statement::Let { name, value })
     }
 
+    fn var_statement(&mut self) -> FyrResult<Statement> {
+        let name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected an identifier after 'var'",
+                    self.previous().span,
+                ));
+            }
+        };
+
+        self.consume(&TokenKind::Equal, "expected '=' after mutable binding name")?;
+        let value = self.expression()?;
+
+        Ok(Statement::Var { name, value })
+    }
+
+    fn assignment_statement(&mut self) -> FyrResult<Statement> {
+        let name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => unreachable!("caller checks assignment shape"),
+        };
+
+        self.consume(&TokenKind::Equal, "expected '=' in assignment")?;
+        let value = self.expression()?;
+
+        Ok(Statement::Assign { name, value })
+    }
+
     fn fn_statement(&mut self) -> FyrResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
@@ -71,13 +112,31 @@ impl<'a> Parser<'a> {
         self.consume(&TokenKind::LParen, "expected '(' after function name")?;
         let params = self.parameter_list()?;
         self.consume(&TokenKind::RParen, "expected ')' after function parameters")?;
+        let return_type = if self.match_kind(&TokenKind::Arrow) {
+            self.type_name()?
+        } else {
+            TypeName::Infer
+        };
         self.consume(&TokenKind::Colon, "expected ':' before function body")?;
         let body = self.block("function body")?;
 
-        Ok(Statement::Fn { name, params, body })
+        Ok(Statement::Fn {
+            name,
+            params,
+            return_type,
+            body,
+        })
     }
 
-    fn parameter_list(&mut self) -> FyrResult<Vec<String>> {
+    fn while_statement(&mut self) -> FyrResult<Statement> {
+        let condition = self.or()?;
+        self.consume(&TokenKind::Colon, "expected ':' after while condition")?;
+        let body = self.block("while body")?;
+
+        Ok(Statement::While { condition, body })
+    }
+
+    fn parameter_list(&mut self) -> FyrResult<Vec<Param>> {
         let mut params = Vec::new();
 
         if self.check(&TokenKind::RParen) {
@@ -86,15 +145,22 @@ impl<'a> Parser<'a> {
 
         loop {
             let token = self.advance();
-            match &token.kind {
-                TokenKind::Identifier(name) => params.push(name.clone()),
+            let name = match &token.kind {
+                TokenKind::Identifier(name) => name.clone(),
                 _ => {
                     return Err(FyrError::new(
                         "expected a parameter name",
                         self.previous().span,
                     ));
                 }
-            }
+            };
+
+            let ty = if self.match_kind(&TokenKind::Colon) {
+                self.type_name()?
+            } else {
+                TypeName::Infer
+            };
+            params.push(Param { name, ty });
 
             if !self.match_kind(&TokenKind::Comma) {
                 break;
@@ -102,6 +168,21 @@ impl<'a> Parser<'a> {
         }
 
         Ok(params)
+    }
+
+    fn type_name(&mut self) -> FyrResult<TypeName> {
+        let token = self.advance();
+
+        match &token.kind {
+            TokenKind::Identifier(name) if name == "i64" => Ok(TypeName::I64),
+            TokenKind::Identifier(name) if name == "bool" => Ok(TypeName::Bool),
+            TokenKind::Identifier(name) if name == "str" => Ok(TypeName::Str),
+            TokenKind::Identifier(name) if name == "unit" => Ok(TypeName::Unit),
+            TokenKind::Identifier(name) => {
+                Err(FyrError::new(format!("unknown type '{name}'"), token.span))
+            }
+            _ => Err(FyrError::new("expected a type name", token.span)),
+        }
     }
 
     fn expression(&mut self) -> FyrResult<Expr> {
@@ -314,6 +395,14 @@ impl<'a> Parser<'a> {
         None
     }
 
+    fn check_identifier_assignment(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Identifier(_))
+            && self
+                .tokens
+                .get(self.current + 1)
+                .is_some_and(|token| discriminant_eq(&token.kind, &TokenKind::Equal))
+    }
+
     fn consume_statement_separator(&mut self) -> FyrResult<()> {
         if self.is_at_end() {
             return Ok(());
@@ -440,9 +529,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_var_assignment_and_while() {
+        let tokens = lex(r#"
+var total = 0
+var i = 1
+while i <= 3:
+    total = total + i
+    i = i + 1
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(program.statements[0], Statement::Var { .. }));
+        assert!(matches!(
+            program.statements[2],
+            Statement::While { ref body, .. } if matches!(body[0], Statement::Assign { .. })
+        ));
+    }
+
+    #[test]
     fn parses_functions_with_if_expression() {
         let tokens = lex(r#"
-fn fib(n):
+fn fib(n: i64) -> i64:
     if n < 2:
         n
     else:
@@ -451,12 +559,56 @@ fn fib(n):
         .expect("lexing should pass");
         let program = parse(&tokens).expect("parsing should pass");
 
-        let Statement::Fn { name, params, body } = &program.statements[0] else {
+        let Statement::Fn {
+            name,
+            params,
+            return_type,
+            body,
+        } = &program.statements[0]
+        else {
             panic!("expected function statement");
         };
 
         assert_eq!(name, "fib");
-        assert_eq!(params, &vec!["n".to_owned()]);
+        assert_eq!(*return_type, TypeName::I64);
+        assert_eq!(
+            params,
+            &vec![Param {
+                name: "n".to_owned(),
+                ty: TypeName::I64,
+            }]
+        );
         assert!(matches!(body[0], Statement::Expr(Expr::If { .. })));
+    }
+
+    #[test]
+    fn parses_functions_without_type_annotations() {
+        let tokens = lex(r#"
+fn fib(n):
+    if n < 2:
+        n
+    else:
+        fib(n - 1) + fib(n - 2)
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("untyped function should parse");
+
+        let Statement::Fn {
+            params,
+            return_type,
+            ..
+        } = &program.statements[0]
+        else {
+            panic!("expected function statement");
+        };
+
+        assert_eq!(*return_type, TypeName::Infer);
+        assert_eq!(
+            params,
+            &vec![Param {
+                name: "n".to_owned(),
+                ty: TypeName::Infer,
+            }]
+        );
     }
 }

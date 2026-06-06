@@ -9,12 +9,40 @@ pub enum Statement {
         name: String,
         value: Expr,
     },
+    Var {
+        name: String,
+        value: Expr,
+    },
+    Assign {
+        name: String,
+        value: Expr,
+    },
     Fn {
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
+        return_type: TypeName,
+        body: Vec<Statement>,
+    },
+    While {
+        condition: Expr,
         body: Vec<Statement>,
     },
     Expr(Expr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: String,
+    pub ty: TypeName,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeName {
+    Infer,
+    I64,
+    Bool,
+    Str,
+    Unit,
 }
 
 #[derive(Debug, Clone, PartialEq)]

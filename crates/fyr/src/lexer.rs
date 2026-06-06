@@ -19,9 +19,12 @@ pub enum TokenKind {
     True,
     False,
     Let,
+    Var,
     Fn,
     If,
     Else,
+    While,
+    Arrow,
     Plus,
     Minus,
     Star,
@@ -91,6 +94,7 @@ impl Lexer {
                 '#' => self.skip_line_comment(),
                 '/' if self.match_char('/') => self.skip_line_comment(),
                 '+' => self.simple(TokenKind::Plus, span),
+                '-' if self.match_char('>') => self.simple(TokenKind::Arrow, span),
                 '-' => self.simple(TokenKind::Minus, span),
                 '*' => self.simple(TokenKind::Star, span),
                 '/' => self.simple(TokenKind::Slash, span),
@@ -351,6 +355,8 @@ impl Lexer {
             "if" => TokenKind::If,
             "let" => TokenKind::Let,
             "true" => TokenKind::True,
+            "var" => TokenKind::Var,
+            "while" => TokenKind::While,
             _ => TokenKind::Identifier(raw),
         };
 
@@ -372,7 +378,8 @@ mod tests {
 
     #[test]
     fn lexes_keywords_and_operators() {
-        let tokens = lex("fn ok():\n    let ready = true && false\n").expect("lexing should pass");
+        let tokens = lex("fn ok(value: bool) -> bool:\n    let ready = value && false\n")
+            .expect("lexing should pass");
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
 
         assert_eq!(
@@ -381,14 +388,19 @@ mod tests {
                 TokenKind::Fn,
                 TokenKind::Identifier("ok".to_owned()),
                 TokenKind::LParen,
+                TokenKind::Identifier("value".to_owned()),
+                TokenKind::Colon,
+                TokenKind::Identifier("bool".to_owned()),
                 TokenKind::RParen,
+                TokenKind::Arrow,
+                TokenKind::Identifier("bool".to_owned()),
                 TokenKind::Colon,
                 TokenKind::Newline,
                 TokenKind::Indent,
                 TokenKind::Let,
                 TokenKind::Identifier("ready".to_owned()),
                 TokenKind::Equal,
-                TokenKind::True,
+                TokenKind::Identifier("value".to_owned()),
                 TokenKind::AndAnd,
                 TokenKind::False,
                 TokenKind::Newline,

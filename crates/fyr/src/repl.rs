@@ -5,9 +5,11 @@ use crate::diagnostic::FyrResult;
 use crate::eval::{Evaluator, Value};
 use crate::lexer;
 use crate::parser;
+use crate::typecheck;
 
 pub fn start() -> FyrResult<()> {
     let mut evaluator = Evaluator::new();
+    let mut typecheck_history = String::new();
     let stdin = io::stdin();
     let mut buffer = String::new();
     let mut in_multiline = false;
@@ -31,7 +33,7 @@ pub fn start() -> FyrResult<()> {
 
         if bytes == 0 {
             if !buffer.trim().is_empty() {
-                eval_repl_source(&mut evaluator, &buffer);
+                eval_repl_source(&mut evaluator, &mut typecheck_history, &buffer);
             }
             println!();
             break;
@@ -65,7 +67,7 @@ pub fn start() -> FyrResult<()> {
         };
 
         if in_multiline && trimmed.is_empty() {
-            eval_repl_source(&mut evaluator, &buffer);
+            eval_repl_source(&mut evaluator, &mut typecheck_history, &buffer);
             buffer.clear();
             in_multiline = false;
             saw_indented_line = false;
@@ -86,7 +88,7 @@ pub fn start() -> FyrResult<()> {
 
         if in_multiline {
             if saw_indented_line && indent == 0 && !trimmed.ends_with(':') {
-                eval_repl_source(&mut evaluator, &buffer);
+                eval_repl_source(&mut evaluator, &mut typecheck_history, &buffer);
                 buffer.clear();
                 in_multiline = false;
                 saw_indented_line = false;
@@ -94,14 +96,36 @@ pub fn start() -> FyrResult<()> {
             continue;
         }
 
-        eval_repl_source(&mut evaluator, &buffer);
+        eval_repl_source(&mut evaluator, &mut typecheck_history, &buffer);
         buffer.clear();
     }
 
     Ok(())
 }
 
-fn eval_repl_source(evaluator: &mut Evaluator, source: &str) {
+fn eval_repl_source(evaluator: &mut Evaluator, typecheck_history: &mut String, source: &str) {
+    let typecheck_source = format!("{typecheck_history}{source}");
+    let tokens = match lexer::lex(&typecheck_source) {
+        Ok(tokens) => tokens,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
+
+    let program = match parser::parse(&tokens) {
+        Ok(program) => program,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
+
+    if let Err(error) = typecheck::check(&program) {
+        eprintln!("{error}");
+        return;
+    }
+
     let tokens = match lexer::lex(source) {
         Ok(tokens) => tokens,
         Err(error) => {
@@ -131,9 +155,14 @@ fn eval_repl_source(evaluator: &mut Evaluator, source: &str) {
                     println!("{value}");
                 }
             }
-            Err(error) => eprintln!("{error}"),
+            Err(error) => {
+                eprintln!("{error}");
+                return;
+            }
         }
     }
+
+    typecheck_history.push_str(source);
 }
 
 fn leading_indent(line: &str) -> usize {
