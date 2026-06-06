@@ -197,7 +197,7 @@ The bootstrap supports:
 - boolean `and`, `or`, and `not`, with `&&`, `||`, and `!` aliases
 - string concatenation with `+`
 - typed function signatures with Python-style indented bodies
-- recursive function calls
+- recursive function calls and local function declarations after the declaration point
 - checked function calls and return types
 - statement-style `if` / `elif` / `else` blocks and value-producing `if` / `elif` / `else` branches
 - `while` loops and array `for value in values` loops

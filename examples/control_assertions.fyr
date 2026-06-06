@@ -16,6 +16,12 @@ fn size_label(value: i64) -> str:
     else:
         return "many"
 
+fn with_local_helper(value: i64) -> i64:
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return double(value)
+
 let branch_label = if len([1, 2]) == 0:
     "empty"
 elif len([1, 2]) == 2:
@@ -29,4 +35,5 @@ assert(size_label(-3) == "negative")
 assert(size_label(0) == "zero")
 assert(size_label(1) == "one")
 assert(size_label(3) == "many")
+assert(with_local_helper(21) == 42)
 assert(branch_label == "pair")

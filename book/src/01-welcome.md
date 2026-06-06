@@ -27,6 +27,16 @@ fn fib(n: i64) -> i64:
 print(fib(10))
 ```
 
+Functions can define local helpers after the values they need are in scope:
+
+```fyr
+fn doubled(value: i64) -> i64:
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return double(value)
+```
+
 Mutation is explicit:
 
 ```fyr

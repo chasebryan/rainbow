@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::ast::{BinaryOp, Expr, Param, Program, Statement, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::span::Span;
 
@@ -22,6 +22,7 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub params: Vec<Param>,
+    pub return_type: TypeName,
     pub body: Vec<Statement>,
 }
 
@@ -55,6 +56,7 @@ pub struct RunResult {
 #[derive(Debug, Clone)]
 pub struct Evaluator {
     scopes: Vec<HashMap<String, Binding>>,
+    structs: HashMap<String, Vec<Param>>,
     outputs: Vec<String>,
 }
 
@@ -63,6 +65,7 @@ const MAX_RANGE_ELEMENTS: i128 = 1_000_000;
 #[derive(Debug, Clone)]
 struct Binding {
     value: Value,
+    ty: TypeName,
     mutable: bool,
 }
 
@@ -78,16 +81,23 @@ impl Evaluator {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            structs: HashMap::new(),
             outputs: Vec::new(),
         }
     }
 
     pub fn run(mut self, program: &Program) -> FyrResult<RunResult> {
-        self.predefine_functions(&program.statements);
+        self.predefine_structs(&program.statements)?;
+        self.predefine_functions(&program.statements)?;
 
         let mut last_value = Value::Unit;
 
         for statement in &program.statements {
+            if matches!(statement, Statement::Struct { .. } | Statement::Fn { .. }) {
+                last_value = Value::Unit;
+                continue;
+            }
+
             last_value = match self.eval_statement_flow(statement)? {
                 Flow::Value(value) => value,
                 Flow::Return(_) => return Err(runtime_error("return outside function")),
@@ -113,15 +123,18 @@ impl Evaluator {
 
     fn eval_statement_flow(&mut self, statement: &Statement) -> FyrResult<Flow> {
         match statement {
-            Statement::Struct { .. } => Ok(Flow::Value(Value::Unit)),
-            Statement::Let { name, value, .. } => {
-                let value = self.eval_value(value)?;
-                self.define(name, value, false);
+            Statement::Struct { name, fields } => {
+                self.define_struct(name, fields)?;
                 Ok(Flow::Value(Value::Unit))
             }
-            Statement::Var { name, value, .. } => {
+            Statement::Let { name, ty, value } => {
                 let value = self.eval_value(value)?;
-                self.define(name, value, true);
+                self.define_binding(name, ty, value, false)?;
+                Ok(Flow::Value(Value::Unit))
+            }
+            Statement::Var { name, ty, value } => {
+                let value = self.eval_value(value)?;
+                self.define_binding(name, ty, value, true)?;
                 Ok(Flow::Value(Value::Unit))
             }
             Statement::Assign { name, value } => {
@@ -130,9 +143,12 @@ impl Evaluator {
                 Ok(Flow::Value(Value::Unit))
             }
             Statement::Fn {
-                name, params, body, ..
+                name,
+                params,
+                return_type,
+                body,
             } => {
-                self.define_function(name, params, body);
+                self.define_function(name, params, return_type, body)?;
                 Ok(Flow::Value(Value::Unit))
             }
             Statement::While { condition, body } => self.eval_while(condition, body),
@@ -159,26 +175,71 @@ impl Evaluator {
         }
     }
 
-    fn predefine_functions(&mut self, statements: &[Statement]) {
+    fn predefine_structs(&mut self, statements: &[Statement]) -> FyrResult<()> {
         for statement in statements {
-            if let Statement::Fn {
-                name, params, body, ..
-            } = statement
-            {
-                self.define_function(name, params, body);
+            if let Statement::Struct { name, fields } = statement {
+                self.define_struct(name, fields)?;
             }
         }
+
+        Ok(())
     }
 
-    fn define_function(&mut self, name: &str, params: &[Param], body: &[Statement]) {
+    fn predefine_functions(&mut self, statements: &[Statement]) -> FyrResult<()> {
+        for statement in statements {
+            if let Statement::Fn {
+                name,
+                params,
+                return_type,
+                body,
+            } = statement
+            {
+                self.define_function(name, params, return_type, body)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn define_function(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        return_type: &TypeName,
+        body: &[Statement],
+    ) -> FyrResult<()> {
+        reject_inferred_signature(name, params, return_type)?;
+        reject_duplicate_members("function", name, "parameter", params)?;
+
         self.define(
             name,
             Value::Function(Function {
                 params: params.to_vec(),
+                return_type: return_type.clone(),
                 body: body.to_vec(),
             }),
+            TypeName::Infer,
             false,
-        );
+        )
+    }
+
+    fn define_struct(&mut self, name: &str, fields: &[Param]) -> FyrResult<()> {
+        if self.structs.contains_key(name) || self.current_scope().contains_key(name) {
+            return Err(runtime_error(format!("struct '{name}' already exists")));
+        }
+
+        let mut seen = HashMap::new();
+        for field in fields {
+            if seen.insert(field.name.clone(), ()).is_some() {
+                return Err(runtime_error(format!(
+                    "struct '{name}' has duplicate field '{}'",
+                    field.name
+                )));
+            }
+        }
+
+        self.structs.insert(name.to_owned(), fields.to_vec());
+        Ok(())
     }
 
     fn eval_value(&mut self, expr: &Expr) -> FyrResult<Value> {
@@ -279,11 +340,57 @@ impl Evaluator {
     }
 
     fn eval_struct_init(&mut self, name: &str, fields: &[(String, Expr)]) -> FyrResult<Flow> {
+        let declared_fields = self
+            .structs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| runtime_error(format!("unknown struct '{name}'")))?;
+
+        let mut seen = HashMap::new();
+        for (field_name, _) in fields {
+            if seen.insert(field_name.clone(), ()).is_some() {
+                return Err(runtime_error(format!(
+                    "field '{field_name}' initialized more than once"
+                )));
+            }
+
+            if !declared_fields
+                .iter()
+                .any(|field| field.name == *field_name)
+            {
+                return Err(runtime_error(format!(
+                    "struct '{name}' has no field '{field_name}'"
+                )));
+            }
+        }
+
+        for field in &declared_fields {
+            if !seen.contains_key(&field.name) {
+                return Err(runtime_error(format!(
+                    "struct '{name}' missing field '{}'",
+                    field.name
+                )));
+            }
+        }
+
         let mut values = HashMap::new();
 
         for (field, expr) in fields {
+            let field_type = declared_fields
+                .iter()
+                .find(|declared| declared.name == *field)
+                .expect("struct literal fields were validated")
+                .ty
+                .clone();
             match self.eval_expr_flow(expr)? {
                 Flow::Value(value) => {
+                    if !value_matches_type(&value, &field_type) {
+                        return Err(runtime_error(format!(
+                            "field '{field}' expected {}, found {}",
+                            format_type_name(&field_type),
+                            format_value_type(&value)
+                        )));
+                    }
                     values.insert(field.clone(), value);
                 }
                 flow => return Ok(flow),
@@ -819,21 +926,40 @@ impl Evaluator {
         }
 
         let mut values = Vec::with_capacity(args.len());
-        for arg in args {
+        for (index, (arg, param)) in args.iter().zip(function.params.iter()).enumerate() {
             match self.eval_expr_flow(arg)? {
-                Flow::Value(value) => values.push(value),
+                Flow::Value(value) => {
+                    if !value_matches_type(&value, &param.ty) {
+                        return Err(runtime_error(format!(
+                            "argument {} for {callee} expected {}, found {}",
+                            index + 1,
+                            format_type_name(&param.ty),
+                            format_value_type(&value)
+                        )));
+                    }
+                    values.push(value);
+                }
                 flow => return Ok(flow),
             }
         }
 
         self.push_scope();
         for (param, value) in function.params.iter().zip(values) {
-            self.define(&param.name, value, false);
+            self.define(&param.name, value, param.ty.clone(), false)?;
         }
         let result = self.eval_block(&function.body);
         self.pop_scope();
         match result? {
-            Flow::Return(value) | Flow::Value(value) => Ok(Flow::Value(value)),
+            Flow::Return(value) | Flow::Value(value) => {
+                if !value_matches_type(&value, &function.return_type) {
+                    return Err(runtime_error(format!(
+                        "return expected {}, found {}",
+                        format_type_name(&function.return_type),
+                        format_value_type(&value)
+                    )));
+                }
+                Ok(Flow::Value(value))
+            }
             Flow::Break => Err(runtime_error("break outside loop")),
             Flow::Continue => Err(runtime_error("continue outside loop")),
         }
@@ -881,7 +1007,8 @@ impl Evaluator {
 
         for value in values {
             self.push_scope();
-            self.define(name, value, false);
+            let ty = infer_value_type(&value);
+            self.define(name, value, ty, false)?;
             let result = self.eval_block(body);
             self.pop_scope();
 
@@ -920,11 +1047,50 @@ impl Evaluator {
         std::mem::take(&mut self.outputs)
     }
 
-    fn define(&mut self, name: &str, value: Value, mutable: bool) {
+    fn define_binding(
+        &mut self,
+        name: &str,
+        annotation: &TypeName,
+        value: Value,
+        mutable: bool,
+    ) -> FyrResult<()> {
+        let ty = if *annotation == TypeName::Infer {
+            infer_value_type(&value)
+        } else {
+            if !value_matches_type(&value, annotation) {
+                return Err(runtime_error(format!(
+                    "binding '{name}' expected {}, found {}",
+                    format_type_name(annotation),
+                    format_value_type(&value)
+                )));
+            }
+            annotation.clone()
+        };
+
+        self.define(name, value, ty, mutable)
+    }
+
+    fn define(&mut self, name: &str, value: Value, ty: TypeName, mutable: bool) -> FyrResult<()> {
+        if self.structs.contains_key(name) {
+            return Err(runtime_error(format!("binding '{name}' already exists")));
+        }
+
+        let scope = self
+            .scopes
+            .last_mut()
+            .expect("evaluator always has a scope");
+        if scope.contains_key(name) {
+            return Err(runtime_error(format!("binding '{name}' already exists")));
+        }
+
+        scope.insert(name.to_owned(), Binding { value, ty, mutable });
+        Ok(())
+    }
+
+    fn current_scope(&mut self) -> &mut HashMap<String, Binding> {
         self.scopes
             .last_mut()
             .expect("evaluator always has a scope")
-            .insert(name.to_owned(), Binding { value, mutable });
     }
 
     fn assign(&mut self, name: &str, value: Value) -> FyrResult<()> {
@@ -933,6 +1099,14 @@ impl Evaluator {
                 if !binding.mutable {
                     return Err(runtime_error(format!(
                         "cannot assign to immutable binding '{name}'"
+                    )));
+                }
+
+                if !value_matches_type(&value, &binding.ty) {
+                    return Err(runtime_error(format!(
+                        "assignment to '{name}' expected {}, found {}",
+                        format_type_name(&binding.ty),
+                        format_value_type(&value)
                     )));
                 }
 
@@ -986,6 +1160,134 @@ fn type_error<T>(expected: &str, actual: &Value) -> FyrResult<T> {
         "expected {expected}, found {}",
         actual.type_name()
     )))
+}
+
+fn reject_inferred_signature(
+    name: &str,
+    params: &[Param],
+    return_type: &TypeName,
+) -> FyrResult<()> {
+    for param in params {
+        if param.ty == TypeName::Infer {
+            return Err(runtime_error(format!(
+                "function '{name}' parameter '{}' needs an explicit type",
+                param.name
+            )));
+        }
+    }
+
+    if *return_type == TypeName::Infer {
+        return Err(runtime_error(format!(
+            "function '{name}' needs an explicit return type"
+        )));
+    }
+
+    Ok(())
+}
+
+fn reject_duplicate_members(
+    owner_kind: &str,
+    owner_name: &str,
+    member_kind: &str,
+    members: &[Param],
+) -> FyrResult<()> {
+    let mut seen = HashMap::new();
+
+    for member in members {
+        if seen.insert(member.name.clone(), ()).is_some() {
+            return Err(runtime_error(format!(
+                "{owner_kind} '{owner_name}' has duplicate {member_kind} '{}'",
+                member.name
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn infer_value_type(value: &Value) -> TypeName {
+    match value {
+        Value::Int(_) => TypeName::I64,
+        Value::Bool(_) => TypeName::Bool,
+        Value::Str(_) => TypeName::Str,
+        Value::Unit => TypeName::Unit,
+        Value::Struct { name, .. } => TypeName::Struct(name.clone()),
+        Value::Array(values) => TypeName::Array(Box::new(infer_array_element_type(values))),
+        Value::Function(_) => TypeName::Infer,
+    }
+}
+
+fn infer_array_element_type(values: &[Value]) -> TypeName {
+    let Some(first) = values.first() else {
+        return TypeName::Infer;
+    };
+
+    let first_type = infer_value_type(first);
+    if values
+        .iter()
+        .skip(1)
+        .all(|value| value_matches_type(value, &first_type))
+    {
+        first_type
+    } else {
+        TypeName::Infer
+    }
+}
+
+fn value_matches_type(value: &Value, ty: &TypeName) -> bool {
+    match ty {
+        TypeName::Infer => true,
+        TypeName::I64 => matches!(value, Value::Int(_)),
+        TypeName::Bool => matches!(value, Value::Bool(_)),
+        TypeName::Str => matches!(value, Value::Str(_)),
+        TypeName::Unit => matches!(value, Value::Unit),
+        TypeName::Struct(expected) => {
+            matches!(value, Value::Struct { name, .. } if name == expected)
+        }
+        TypeName::Array(element) => match value {
+            Value::Array(values) => values
+                .iter()
+                .all(|value| value_matches_type(value, element)),
+            _ => false,
+        },
+    }
+}
+
+fn format_type_name(ty: &TypeName) -> String {
+    match ty {
+        TypeName::Infer => "infer".to_owned(),
+        TypeName::I64 => "i64".to_owned(),
+        TypeName::Bool => "bool".to_owned(),
+        TypeName::Str => "str".to_owned(),
+        TypeName::Unit => "unit".to_owned(),
+        TypeName::Struct(name) => name.clone(),
+        TypeName::Array(element) => format!("[{}]", format_type_name(element)),
+    }
+}
+
+fn format_value_type(value: &Value) -> String {
+    match value {
+        Value::Array(values) => format_array_type(values),
+        Value::Struct { name, .. } => name.clone(),
+        _ => value.type_name().to_owned(),
+    }
+}
+
+fn format_array_type(values: &[Value]) -> String {
+    let Some(first) = values.first() else {
+        return "array".to_owned();
+    };
+
+    let first_type = format_value_type(first);
+    if values
+        .iter()
+        .skip(1)
+        .all(|value| format_value_type(value) == first_type)
+    {
+        format!("[{first_type}]")
+    } else {
+        "array".to_owned()
+    }
 }
 
 fn checked_int(operation: &str, value: Option<i64>) -> FyrResult<Value> {
@@ -1104,6 +1406,61 @@ mod tests {
     }
 
     #[test]
+    fn rejects_duplicate_runtime_bindings() {
+        let error =
+            run("let answer = 41\nlet answer = 42\n").expect_err("duplicate binding should fail");
+
+        assert!(error.message.contains("binding 'answer' already exists"));
+    }
+
+    #[test]
+    fn rejects_runtime_binding_annotation_mismatch() {
+        let primitive = run("let answer: bool = 42\n").expect_err("binding annotation should fail");
+        assert!(
+            primitive
+                .message
+                .contains("binding 'answer' expected bool, found i64")
+        );
+
+        let array = run("let values: [i64] = [true]\n").expect_err("array annotation should fail");
+        assert!(
+            array
+                .message
+                .contains("binding 'values' expected [i64], found [bool]")
+        );
+
+        let nominal = run(r#"
+struct Point:
+    x: i64
+
+struct Size:
+    x: i64
+
+let p: Point = Size { x: 3 }
+"#)
+        .expect_err("nominal annotation should fail");
+        assert!(
+            nominal
+                .message
+                .contains("binding 'p' expected Point, found Size")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_runtime_functions() {
+        let error = run(r#"
+fn answer() -> i64:
+    return 41
+
+fn answer() -> i64:
+    return 42
+"#)
+        .expect_err("duplicate function should fail");
+
+        assert!(error.message.contains("binding 'answer' already exists"));
+    }
+
+    #[test]
     fn supports_string_concat() {
         let result = run("\"Fy\" + \"r\"\n").expect("program should run");
 
@@ -1181,6 +1538,61 @@ fib(10)
     }
 
     #[test]
+    fn rejects_runtime_argument_type_mismatch() {
+        let error = run(r#"
+fn add(a: i64, b: i64) -> i64:
+    return a + b
+
+add(1, true)
+"#)
+        .expect_err("argument type mismatch should fail at runtime");
+
+        assert!(
+            error
+                .message
+                .contains("argument 2 for add expected i64, found bool")
+        );
+    }
+
+    #[test]
+    fn rejects_runtime_return_type_mismatch() {
+        let error = run(r#"
+fn bad() -> i64:
+    return true
+
+bad()
+"#)
+        .expect_err("return type mismatch should fail at runtime");
+
+        assert!(error.message.contains("return expected i64, found bool"));
+    }
+
+    #[test]
+    fn rejects_untyped_runtime_function_signatures() {
+        let param = run(r#"
+fn add(a, b: i64) -> i64:
+    return b
+"#)
+        .expect_err("untyped parameter should fail at runtime");
+        assert!(
+            param
+                .message
+                .contains("function 'add' parameter 'a' needs an explicit type")
+        );
+
+        let return_type = run(r#"
+fn add(a: i64):
+    return a
+"#)
+        .expect_err("untyped return should fail at runtime");
+        assert!(
+            return_type
+                .message
+                .contains("function 'add' needs an explicit return type")
+        );
+    }
+
+    #[test]
     fn resolves_forward_function_calls() {
         let result = run(r#"
 print(double(21))
@@ -1207,6 +1619,137 @@ shadow() + x
         .expect("scoped function should run");
 
         assert_eq!(result.last_value, Value::Int(43));
+    }
+
+    #[test]
+    fn runs_local_functions_after_declaration() {
+        let result = run(r#"
+fn outer(value: i64) -> i64:
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return double(value)
+
+outer(21)
+"#)
+        .expect("local function should run after declaration");
+
+        assert_eq!(result.last_value, Value::Int(42));
+    }
+
+    #[test]
+    fn runs_recursive_local_functions() {
+        let result = run(r#"
+fn outer(value: i64) -> i64:
+    fn countdown(n: i64) -> i64:
+        if n == 0:
+            return value
+        else:
+            return countdown(n - 1)
+
+    return countdown(3)
+
+outer(42)
+"#)
+        .expect("recursive local function should run");
+
+        assert_eq!(result.last_value, Value::Int(42));
+    }
+
+    #[test]
+    fn rejects_runtime_parameter_redeclaration() {
+        let error = run(r#"
+fn echo(value: i64) -> i64:
+    let value = 42
+    return value
+
+echo(1)
+"#)
+        .expect_err("parameter redeclaration should fail");
+
+        assert!(error.message.contains("binding 'value' already exists"));
+    }
+
+    #[test]
+    fn rejects_runtime_for_variable_redeclaration() {
+        let error = run(r#"
+for value in [1]:
+    let value = 2
+"#)
+        .expect_err("for variable redeclaration should fail");
+
+        assert!(error.message.contains("binding 'value' already exists"));
+    }
+
+    #[test]
+    fn rejects_duplicate_runtime_function_parameters() {
+        let error = run(r#"
+fn choose(value: i64, value: i64) -> i64:
+    return value
+
+choose(1, 2)
+"#)
+        .expect_err("duplicate function parameter should fail");
+
+        assert!(
+            error
+                .message
+                .contains("function 'choose' has duplicate parameter 'value'")
+        );
+    }
+
+    #[test]
+    fn rejects_runtime_assignment_type_changes() {
+        let primitive = run(r#"
+var value = 1
+value = "one"
+"#)
+        .expect_err("primitive assignment type change should fail");
+        assert!(
+            primitive
+                .message
+                .contains("assignment to 'value' expected i64, found str")
+        );
+
+        let array = run(r#"
+var values = [1]
+values = [true]
+"#)
+        .expect_err("array assignment type change should fail");
+        assert!(
+            array
+                .message
+                .contains("assignment to 'values' expected [i64], found [bool]")
+        );
+
+        let nominal = run(r#"
+struct Point:
+    x: i64
+
+struct Size:
+    x: i64
+
+var p = Point { x: 3 }
+p = Size { x: 3 }
+"#)
+        .expect_err("nominal assignment type change should fail");
+        assert!(
+            nominal
+                .message
+                .contains("assignment to 'p' expected Point, found Size")
+        );
+    }
+
+    #[test]
+    fn assigns_to_runtime_typed_empty_arrays() {
+        let result = run(r#"
+var values: [i64] = []
+values = [3, 5, 8]
+len(values)
+"#)
+        .expect("typed empty array assignment should run");
+
+        assert_eq!(result.last_value, Value::Int(3));
     }
 
     #[test]
@@ -1280,6 +1823,163 @@ p.x * p.x + p.y * p.y
         .expect("struct program should run");
 
         assert_eq!(result.last_value, Value::Int(25));
+    }
+
+    #[test]
+    fn supports_forward_struct_literals() {
+        let result = run(r#"
+let p = Point { x: 3, y: 4 }
+
+struct Point:
+    x: i64
+    y: i64
+
+p.x + p.y
+"#)
+        .expect("forward struct literal should run");
+
+        assert_eq!(result.last_value, Value::Int(7));
+    }
+
+    #[test]
+    fn rejects_unknown_runtime_structs() {
+        let error =
+            run("Point { x: 3 }\n").expect_err("unknown struct literal should fail at runtime");
+
+        assert!(error.message.contains("unknown struct 'Point'"));
+    }
+
+    #[test]
+    fn rejects_duplicate_runtime_struct_declarations() {
+        let error = run(r#"
+struct Point:
+    x: i64
+
+struct Point:
+    x: i64
+"#)
+        .expect_err("duplicate struct declaration should fail at runtime");
+
+        assert!(error.message.contains("struct 'Point' already exists"));
+    }
+
+    #[test]
+    fn rejects_duplicate_runtime_struct_fields() {
+        let error = run(r#"
+struct Point:
+    x: i64
+    x: bool
+"#)
+        .expect_err("duplicate struct field should fail at runtime");
+
+        assert!(
+            error
+                .message
+                .contains("struct 'Point' has duplicate field 'x'")
+        );
+    }
+
+    #[test]
+    fn rejects_runtime_struct_literal_field_errors() {
+        let duplicate = run(r#"
+struct Point:
+    x: i64
+    y: i64
+
+Point { x: 3, x: 4, y: 5 }
+"#)
+        .expect_err("duplicate struct literal field should fail at runtime");
+        assert!(
+            duplicate
+                .message
+                .contains("field 'x' initialized more than once")
+        );
+
+        let unknown = run(r#"
+struct Point:
+    x: i64
+
+Point { x: 3, y: 4 }
+"#)
+        .expect_err("unknown struct literal field should fail at runtime");
+        assert!(unknown.message.contains("struct 'Point' has no field 'y'"));
+
+        let missing = run(r#"
+struct Point:
+    x: i64
+    y: i64
+
+Point { x: 3 }
+"#)
+        .expect_err("missing struct literal field should fail at runtime");
+        assert!(missing.message.contains("struct 'Point' missing field 'y'"));
+
+        let primitive_mismatch = run(r#"
+struct Point:
+    x: i64
+
+Point { x: true }
+"#)
+        .expect_err("struct primitive field mismatch should fail at runtime");
+        assert!(
+            primitive_mismatch
+                .message
+                .contains("field 'x' expected i64, found bool")
+        );
+
+        let array_mismatch = run(r#"
+struct Row:
+    values: [i64]
+
+Row { values: [true] }
+"#)
+        .expect_err("struct array field mismatch should fail at runtime");
+        assert!(
+            array_mismatch
+                .message
+                .contains("field 'values' expected [i64], found [bool]")
+        );
+
+        let struct_mismatch = run(r#"
+struct Point:
+    x: i64
+
+struct Line:
+    start: Point
+
+struct Size:
+    x: i64
+
+Line { start: Size { x: 3 } }
+"#)
+        .expect_err("struct nominal field mismatch should fail at runtime");
+        assert!(
+            struct_mismatch
+                .message
+                .contains("field 'start' expected Point, found Size")
+        );
+    }
+
+    #[test]
+    fn rejects_runtime_names_that_collide_with_structs() {
+        let binding = run(r#"
+struct Point:
+    x: i64
+
+let Point = 42
+"#)
+        .expect_err("binding and struct collision should fail at runtime");
+        assert!(binding.message.contains("binding 'Point' already exists"));
+
+        let function = run(r#"
+struct Point:
+    x: i64
+
+fn Point() -> i64:
+    return 42
+"#)
+        .expect_err("function and struct collision should fail at runtime");
+        assert!(function.message.contains("binding 'Point' already exists"));
     }
 
     #[test]
@@ -1688,10 +2388,10 @@ left + right
     #[test]
     fn appends_to_arrays() {
         let result = run(r#"
-let values = append(append([], 3), 5)
-let values = append(values, 8)
-let values = append(values, 13)
-append(values, 21)
+let first = append(append([], 3), 5)
+let second = append(first, 8)
+let third = append(second, 13)
+append(third, 21)
 "#)
         .expect("append should run");
 

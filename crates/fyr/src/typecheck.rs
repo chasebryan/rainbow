@@ -115,18 +115,7 @@ impl Checker {
                 ..
             } = statement
             {
-                reject_inferred_signature(name, params, return_type)?;
-                reject_duplicate_members("function", name, "parameter", params)?;
-                for param in params {
-                    self.validate_type_name(&param.ty)?;
-                }
-                self.validate_type_name(return_type)?;
-
-                let signature = Type::Function {
-                    params: params.iter().map(|param| param.ty.as_type()).collect(),
-                    return_type: Box::new(return_type.as_type()),
-                };
-
+                let signature = self.function_signature(name, params, return_type)?;
                 self.define(name, signature, false)?;
             }
         }
@@ -162,36 +151,12 @@ impl Checker {
                 Ok(Type::Unit)
             }
             Statement::Fn {
+                name,
                 params,
                 return_type,
                 body,
                 ..
-            } => {
-                reject_inferred_signature("<local>", params, return_type)?;
-                reject_duplicate_members("function", "<local>", "parameter", params)?;
-                for param in params {
-                    self.validate_type_name(&param.ty)?;
-                }
-                self.validate_type_name(return_type)?;
-
-                let expected = return_type.as_type();
-                self.push_scope();
-                self.return_types.push(expected.clone());
-                for Param { name, ty } in params {
-                    self.define(name, ty.as_type(), false)?;
-                }
-                let body_type = self.check_block(body)?;
-                self.return_types.pop();
-                self.pop_scope();
-
-                if body_type != expected && body_type != Type::Never {
-                    return Err(type_error(format!(
-                        "function returns {body_type}, but signature says {expected}"
-                    )));
-                }
-
-                Ok(Type::Unit)
-            }
+            } => self.check_function_statement(name, params, return_type, body),
             Statement::While { condition, body } => {
                 self.check_while(condition, body)?;
                 Ok(Type::Unit)
@@ -254,6 +219,65 @@ impl Checker {
 
         self.define(name, binding_type, mutable)?;
         Ok(Type::Unit)
+    }
+
+    fn check_function_statement(
+        &mut self,
+        name: &str,
+        params: &[Param],
+        return_type: &TypeName,
+        body: &[Statement],
+    ) -> FyrResult<Type> {
+        let signature = self.function_signature(name, params, return_type)?;
+        if !self.is_predeclared_top_level_function(name, &signature) {
+            self.define(name, signature, false)?;
+        }
+
+        let expected = return_type.as_type();
+        self.push_scope();
+        self.return_types.push(expected.clone());
+        for Param { name, ty } in params {
+            self.define(name, ty.as_type(), false)?;
+        }
+        let body_type = self.check_block(body)?;
+        self.return_types.pop();
+        self.pop_scope();
+
+        if body_type != expected && body_type != Type::Never {
+            return Err(type_error(format!(
+                "function returns {body_type}, but signature says {expected}"
+            )));
+        }
+
+        Ok(Type::Unit)
+    }
+
+    fn function_signature(
+        &self,
+        name: &str,
+        params: &[Param],
+        return_type: &TypeName,
+    ) -> FyrResult<Type> {
+        reject_inferred_signature(name, params, return_type)?;
+        reject_duplicate_members("function", name, "parameter", params)?;
+        for param in params {
+            self.validate_type_name(&param.ty)?;
+        }
+        self.validate_type_name(return_type)?;
+
+        Ok(Type::Function {
+            params: params.iter().map(|param| param.ty.as_type()).collect(),
+            return_type: Box::new(return_type.as_type()),
+        })
+    }
+
+    fn is_predeclared_top_level_function(&self, name: &str, signature: &Type) -> bool {
+        self.scopes.len() == 1
+            && self
+                .scopes
+                .last()
+                .and_then(|scope| scope.get(name))
+                .is_some_and(|binding| &binding.ty == signature)
     }
 
     fn check_expr(&mut self, expr: &Expr) -> FyrResult<Type> {
@@ -1132,6 +1156,77 @@ let result = fib(10)
 "#,
         )
         .expect("program should typecheck");
+    }
+
+    #[test]
+    fn accepts_local_functions_after_declaration() {
+        typecheck(
+            r#"
+fn outer(value: i64) -> i64:
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return double(value)
+
+assert(outer(21) == 42)
+"#,
+        )
+        .expect("local function should typecheck after declaration");
+    }
+
+    #[test]
+    fn accepts_recursive_local_functions() {
+        typecheck(
+            r#"
+fn outer(value: i64) -> i64:
+    fn countdown(n: i64) -> i64:
+        if n == 0:
+            return value
+        else:
+            return countdown(n - 1)
+
+    return countdown(3)
+
+assert(outer(42) == 42)
+"#,
+        )
+        .expect("recursive local function should typecheck");
+    }
+
+    #[test]
+    fn rejects_local_function_before_declaration() {
+        let error = typecheck(
+            r#"
+fn outer(value: i64) -> i64:
+    let result = double(value)
+
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return result
+"#,
+        )
+        .expect_err("local function should not be available before declaration");
+
+        assert!(error.message.contains("unknown function 'double'"));
+    }
+
+    #[test]
+    fn rejects_local_function_name_colliding_with_binding() {
+        let error = typecheck(
+            r#"
+fn outer(value: i64) -> i64:
+    let double = value
+
+    fn double(input: i64) -> i64:
+        return input * 2
+
+    return double
+"#,
+        )
+        .expect_err("local function collision should fail");
+
+        assert!(error.message.contains("binding 'double' already exists"));
     }
 
     #[test]
