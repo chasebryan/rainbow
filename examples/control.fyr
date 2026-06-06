@@ -1,0 +1,10 @@
+# Early returns and loop exits.
+fn first_multiple_of_seven(limit: i64) -> i64:
+    var i = 1
+    while i <= limit:
+        if i % 7 == 0:
+            return i
+        i = i + 1
+    return -1
+
+print(first_multiple_of_seven(20))

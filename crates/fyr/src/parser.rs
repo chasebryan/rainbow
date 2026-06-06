@@ -41,8 +41,32 @@ impl<'a> Parser<'a> {
             return self.fn_statement();
         }
 
+        if self.match_kind(&TokenKind::Struct) {
+            return self.struct_statement();
+        }
+
         if self.match_kind(&TokenKind::While) {
             return self.while_statement();
+        }
+
+        if self.match_kind(&TokenKind::For) {
+            return self.for_statement();
+        }
+
+        if self.match_kind(&TokenKind::If) {
+            return self.if_statement();
+        }
+
+        if self.match_kind(&TokenKind::Return) {
+            return self.return_statement();
+        }
+
+        if self.match_kind(&TokenKind::Break) {
+            return Ok(Statement::Break);
+        }
+
+        if self.match_kind(&TokenKind::Continue) {
+            return Ok(Statement::Continue);
         }
 
         if self.check_identifier_assignment() {
@@ -63,10 +87,11 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let ty = self.optional_type_annotation()?;
         self.consume(&TokenKind::Equal, "expected '=' after binding name")?;
         let value = self.expression()?;
 
-        Ok(Statement::Let { name, value })
+        Ok(Statement::Let { name, ty, value })
     }
 
     fn var_statement(&mut self) -> FyrResult<Statement> {
@@ -80,10 +105,11 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let ty = self.optional_type_annotation()?;
         self.consume(&TokenKind::Equal, "expected '=' after mutable binding name")?;
         let value = self.expression()?;
 
-        Ok(Statement::Var { name, value })
+        Ok(Statement::Var { name, ty, value })
     }
 
     fn assignment_statement(&mut self) -> FyrResult<Statement> {
@@ -128,12 +154,122 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn struct_statement(&mut self) -> FyrResult<Statement> {
+        let name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected a struct name after 'struct'",
+                    self.previous().span,
+                ));
+            }
+        };
+
+        self.consume(&TokenKind::Colon, "expected ':' before struct fields")?;
+        let fields = self.struct_fields()?;
+
+        Ok(Statement::Struct { name, fields })
+    }
+
+    fn struct_fields(&mut self) -> FyrResult<Vec<Param>> {
+        self.consume(
+            &TokenKind::Newline,
+            "expected a newline before struct fields",
+        )?;
+        self.consume(&TokenKind::Indent, "expected indented struct fields")?;
+        self.skip_newlines();
+
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+            let field_name = match &self.advance().kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(FyrError::new(
+                        "expected a field name in struct",
+                        self.previous().span,
+                    ));
+                }
+            };
+
+            self.consume(&TokenKind::Colon, "expected ':' after field name")?;
+            let ty = self.type_name()?;
+            fields.push(Param {
+                name: field_name,
+                ty,
+            });
+            self.consume_statement_separator()?;
+        }
+
+        if fields.is_empty() {
+            return Err(FyrError::new(
+                "expected at least one field in struct",
+                self.peek().span,
+            ));
+        }
+
+        self.consume(&TokenKind::Dedent, "expected struct fields to dedent")?;
+        Ok(fields)
+    }
+
     fn while_statement(&mut self) -> FyrResult<Statement> {
         let condition = self.or()?;
         self.consume(&TokenKind::Colon, "expected ':' after while condition")?;
         let body = self.block("while body")?;
 
         Ok(Statement::While { condition, body })
+    }
+
+    fn for_statement(&mut self) -> FyrResult<Statement> {
+        let name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected an identifier after 'for'",
+                    self.previous().span,
+                ));
+            }
+        };
+
+        self.consume(&TokenKind::In, "expected 'in' after for-loop binding")?;
+        let iterable = self.expression()?;
+        self.consume(&TokenKind::Colon, "expected ':' after for-loop iterable")?;
+        let body = self.block("for body")?;
+
+        Ok(Statement::For {
+            name,
+            iterable,
+            body,
+        })
+    }
+
+    fn if_statement(&mut self) -> FyrResult<Statement> {
+        let condition = self.or()?;
+        self.consume(&TokenKind::Colon, "expected ':' after if condition")?;
+        let then_branch = self.block("if body")?;
+
+        self.skip_newlines();
+        let else_branch = if self.match_kind(&TokenKind::Else) {
+            self.consume(&TokenKind::Colon, "expected ':' after else")?;
+            self.block("else body")?
+        } else {
+            Vec::new()
+        };
+
+        Ok(Statement::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
+    }
+
+    fn return_statement(&mut self) -> FyrResult<Statement> {
+        let value = if self.check_statement_boundary() {
+            None
+        } else {
+            Some(self.expression()?)
+        };
+
+        Ok(Statement::Return { value })
     }
 
     fn parameter_list(&mut self) -> FyrResult<Vec<Param>> {
@@ -170,17 +306,28 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
+    fn optional_type_annotation(&mut self) -> FyrResult<TypeName> {
+        if self.match_kind(&TokenKind::Colon) {
+            self.type_name()
+        } else {
+            Ok(TypeName::Infer)
+        }
+    }
+
     fn type_name(&mut self) -> FyrResult<TypeName> {
         let token = self.advance();
 
         match &token.kind {
+            TokenKind::LBracket => {
+                let element = self.type_name()?;
+                self.consume(&TokenKind::RBracket, "expected ']' after array type")?;
+                Ok(TypeName::Array(Box::new(element)))
+            }
             TokenKind::Identifier(name) if name == "i64" => Ok(TypeName::I64),
             TokenKind::Identifier(name) if name == "bool" => Ok(TypeName::Bool),
             TokenKind::Identifier(name) if name == "str" => Ok(TypeName::Str),
             TokenKind::Identifier(name) if name == "unit" => Ok(TypeName::Unit),
-            TokenKind::Identifier(name) => {
-                Err(FyrError::new(format!("unknown type '{name}'"), token.span))
-            }
+            TokenKind::Identifier(name) => Ok(TypeName::Struct(name.clone())),
             _ => Err(FyrError::new("expected a type name", token.span)),
         }
     }
@@ -339,32 +486,104 @@ impl<'a> Parser<'a> {
         let mut expr = self.primary()?;
 
         loop {
-            if !self.match_kind(&TokenKind::LParen) {
-                break;
-            }
+            if self.match_kind(&TokenKind::LParen) {
+                let Expr::Variable(callee) = expr else {
+                    return Err(FyrError::new(
+                        "only named functions can be called in Fyr bootstrap",
+                        self.previous().span,
+                    ));
+                };
 
-            let Expr::Variable(callee) = expr else {
-                return Err(FyrError::new(
-                    "only named functions can be called in Fyr bootstrap",
-                    self.previous().span,
-                ));
-            };
-
-            let mut args = Vec::new();
-            if !self.check(&TokenKind::RParen) {
-                loop {
-                    args.push(self.expression()?);
-                    if !self.match_kind(&TokenKind::Comma) {
-                        break;
+                let mut args = Vec::new();
+                if !self.check(&TokenKind::RParen) {
+                    loop {
+                        args.push(self.expression()?);
+                        if !self.match_kind(&TokenKind::Comma) {
+                            break;
+                        }
                     }
                 }
+
+                self.consume(&TokenKind::RParen, "expected ')' after function arguments")?;
+                expr = Expr::Call { callee, args };
+                continue;
             }
 
-            self.consume(&TokenKind::RParen, "expected ')' after function arguments")?;
-            expr = Expr::Call { callee, args };
+            if self.match_kind(&TokenKind::LBrace) {
+                let Expr::Variable(name) = expr else {
+                    return Err(FyrError::new(
+                        "expected a struct name before '{'",
+                        self.previous().span,
+                    ));
+                };
+                let fields = self.struct_initializer_fields()?;
+                expr = Expr::StructInit { name, fields };
+                continue;
+            }
+
+            if self.match_kind(&TokenKind::Dot) {
+                let field = match &self.advance().kind {
+                    TokenKind::Identifier(name) => name.clone(),
+                    _ => {
+                        return Err(FyrError::new(
+                            "expected a field name after '.'",
+                            self.previous().span,
+                        ));
+                    }
+                };
+                expr = Expr::Field {
+                    object: Box::new(expr),
+                    field,
+                };
+                continue;
+            }
+
+            if self.match_kind(&TokenKind::LBracket) {
+                let index = self.expression()?;
+                self.consume(&TokenKind::RBracket, "expected ']' after index")?;
+                expr = Expr::Index {
+                    collection: Box::new(expr),
+                    index: Box::new(index),
+                };
+                continue;
+            }
+
+            break;
         }
 
         Ok(expr)
+    }
+
+    fn struct_initializer_fields(&mut self) -> FyrResult<Vec<(String, Expr)>> {
+        let mut fields = Vec::new();
+
+        if self.check(&TokenKind::RBrace) {
+            self.advance();
+            return Ok(fields);
+        }
+
+        loop {
+            let field_name = match &self.advance().kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(FyrError::new(
+                        "expected a field name in struct initializer",
+                        self.previous().span,
+                    ));
+                }
+            };
+
+            self.consume(&TokenKind::Colon, "expected ':' after field name")?;
+            let value = self.expression()?;
+            fields.push((field_name, value));
+
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.consume(&TokenKind::RBrace, "expected '}' after struct initializer")?;
+        Ok(fields)
     }
 
     fn primary(&mut self) -> FyrResult<Expr> {
@@ -376,6 +595,7 @@ impl<'a> Parser<'a> {
             TokenKind::True => Ok(Expr::Bool(true)),
             TokenKind::False => Ok(Expr::Bool(false)),
             TokenKind::Identifier(name) => Ok(Expr::Variable(name.clone())),
+            TokenKind::LBracket => self.array_literal(),
             TokenKind::LParen => {
                 let expr = self.expression()?;
                 self.consume(&TokenKind::RParen, "expected ')' after expression")?;
@@ -383,6 +603,25 @@ impl<'a> Parser<'a> {
             }
             _ => Err(FyrError::new("expected an expression", token.span)),
         }
+    }
+
+    fn array_literal(&mut self) -> FyrResult<Expr> {
+        let mut elements = Vec::new();
+
+        if self.check(&TokenKind::RBracket) {
+            self.advance();
+            return Ok(Expr::Array(elements));
+        }
+
+        loop {
+            elements.push(self.expression()?);
+            if !self.match_kind(&TokenKind::Comma) {
+                break;
+            }
+        }
+
+        self.consume(&TokenKind::RBracket, "expected ']' after array literal")?;
+        Ok(Expr::Array(elements))
     }
 
     fn match_binary(&mut self, choices: &[(TokenKind, BinaryOp)]) -> Option<BinaryOp> {
@@ -401,6 +640,10 @@ impl<'a> Parser<'a> {
                 .tokens
                 .get(self.current + 1)
                 .is_some_and(|token| discriminant_eq(&token.kind, &TokenKind::Equal))
+    }
+
+    fn check_statement_boundary(&self) -> bool {
+        self.check(&TokenKind::Newline) || self.check(&TokenKind::Dedent) || self.is_at_end()
     }
 
     fn consume_statement_separator(&mut self) -> FyrResult<()> {
@@ -548,7 +791,132 @@ while i <= 3:
     }
 
     #[test]
-    fn parses_functions_with_if_expression() {
+    fn parses_for_loops() {
+        let tokens = lex(r#"
+for value in [1, 2, 3]:
+    print(value)
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::For { ref body, .. } if matches!(body[0], Statement::Expr(Expr::Call { .. }))
+        ));
+    }
+
+    #[test]
+    fn parses_statement_if_without_else() {
+        let tokens = lex(r#"
+if true:
+    print("yes")
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::If {
+                ref else_branch,
+                ..
+            } if else_branch.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_return_break_and_continue() {
+        let tokens = lex(r#"
+fn scan(limit: i64) -> i64:
+    var i = 0
+    while i < limit:
+        i = i + 1
+        if i == 2:
+            continue
+        else:
+            i = i
+        if i == 4:
+            break
+        else:
+            i = i
+    return i
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        let Statement::Fn { body, .. } = &program.statements[0] else {
+            panic!("expected function");
+        };
+
+        assert!(matches!(body.last(), Some(Statement::Return { .. })));
+    }
+
+    #[test]
+    fn parses_structs_and_field_access() {
+        let tokens = lex(r#"
+struct Point:
+    x: i64
+    y: i64
+
+let p = Point { x: 3, y: 4 }
+p.x + p.y
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(program.statements[0], Statement::Struct { .. }));
+        assert!(matches!(
+            program.statements[2],
+            Statement::Expr(Expr::Binary { .. })
+        ));
+    }
+
+    #[test]
+    fn parses_arrays_and_indexing() {
+        let tokens = lex(r#"
+fn first(items: [i64]) -> i64:
+    return items[0]
+
+let values = [3, 4, 5]
+first(values)
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        let Statement::Fn { params, .. } = &program.statements[0] else {
+            panic!("expected function");
+        };
+
+        assert!(matches!(params[0].ty, TypeName::Array(_)));
+        assert!(matches!(program.statements[1], Statement::Let { .. }));
+    }
+
+    #[test]
+    fn parses_annotated_bindings() {
+        let tokens = lex(r#"
+let count: i64 = 42
+var values: [i64] = []
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Let {
+                ty: TypeName::I64,
+                ..
+            }
+        ));
+        assert!(matches!(
+            program.statements[1],
+            Statement::Var {
+                ty: TypeName::Array(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_functions_with_if_statement_value() {
         let tokens = lex(r#"
 fn fib(n: i64) -> i64:
     if n < 2:
@@ -578,7 +946,33 @@ fn fib(n: i64) -> i64:
                 ty: TypeName::I64,
             }]
         );
-        assert!(matches!(body[0], Statement::Expr(Expr::If { .. })));
+        assert!(matches!(
+            body[0],
+            Statement::If {
+                ref else_branch,
+                ..
+            } if !else_branch.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_if_expression_in_binding() {
+        let tokens = lex(r#"
+let value = if true:
+    1
+else:
+    2
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Let {
+                value: Expr::If { .. },
+                ..
+            }
+        ));
     }
 
     #[test]

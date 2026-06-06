@@ -31,7 +31,7 @@ fn fib(n: i64) -> i64:
         fib(n - 1) + fib(n - 2)
 ```
 
-The bootstrap implementation now supports typed function signatures, explicit mutable `var` bindings, static checks for calls and primitive operations, Python-style indented blocks, expression-style `if` / `else` branches, and `while` loops. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
+The bootstrap implementation now supports typed function signatures, optional binding annotations, nominal structs with field access, value equality for data, homogeneous arrays with checked indexing, concatenation, and iteration, end-exclusive `range` loops, explicit mutable `var` bindings, static checks for calls and primitive operations, Python-style indented blocks, statement-style `if` blocks, expression-style `if` / `else` branches, `while` loops, and explicit `return` / `break` / `continue` exits. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
 
 ## Toolchain Direction
 
@@ -42,7 +42,7 @@ fyr
 fyr run app.fyr
 fyr check app.fyr
 fyr build
-fyr test
+fyr test app.fyr
 fyr fmt
 ```
 

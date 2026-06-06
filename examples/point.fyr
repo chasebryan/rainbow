@@ -1,0 +1,11 @@
+# Nominal data with structs and field access.
+struct Point:
+    x: i64
+    y: i64
+
+fn length_squared(p: Point) -> i64:
+    return p.x * p.x + p.y * p.y
+
+let p = Point { x: 3, y: 4 }
+print(length_squared(p))
+

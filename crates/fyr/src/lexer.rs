@@ -21,9 +21,15 @@ pub enum TokenKind {
     Let,
     Var,
     Fn,
+    For,
+    In,
     If,
     Else,
     While,
+    Return,
+    Break,
+    Continue,
+    Struct,
     Arrow,
     Plus,
     Minus,
@@ -32,8 +38,13 @@ pub enum TokenKind {
     Percent,
     LParen,
     RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
     Comma,
     Colon,
+    Dot,
     Equal,
     EqualEqual,
     Bang,
@@ -101,8 +112,13 @@ impl Lexer {
                 '%' => self.simple(TokenKind::Percent, span),
                 '(' => self.simple(TokenKind::LParen, span),
                 ')' => self.simple(TokenKind::RParen, span),
+                '{' => self.simple(TokenKind::LBrace, span),
+                '}' => self.simple(TokenKind::RBrace, span),
+                '[' => self.simple(TokenKind::LBracket, span),
+                ']' => self.simple(TokenKind::RBracket, span),
                 ',' => self.simple(TokenKind::Comma, span),
                 ':' => self.simple(TokenKind::Colon, span),
+                '.' => self.simple(TokenKind::Dot, span),
                 '=' if self.match_char('=') => self.simple(TokenKind::EqualEqual, span),
                 '=' => self.simple(TokenKind::Equal, span),
                 '!' if self.match_char('=') => self.simple(TokenKind::BangEqual, span),
@@ -350,10 +366,16 @@ impl Lexer {
 
         let kind = match raw.as_str() {
             "else" => TokenKind::Else,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             "false" => TokenKind::False,
             "fn" => TokenKind::Fn,
+            "for" => TokenKind::For,
             "if" => TokenKind::If,
+            "in" => TokenKind::In,
             "let" => TokenKind::Let,
+            "return" => TokenKind::Return,
+            "struct" => TokenKind::Struct,
             "true" => TokenKind::True,
             "var" => TokenKind::Var,
             "while" => TokenKind::While,
@@ -408,6 +430,15 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn lexes_for_in_keywords() {
+        let tokens = lex("for value in values:\n    print(value)\n").expect("lexing should pass");
+        let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
+
+        assert!(matches!(kinds[0], TokenKind::For));
+        assert!(matches!(kinds[2], TokenKind::In));
     }
 
     #[test]

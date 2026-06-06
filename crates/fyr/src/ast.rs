@@ -7,15 +7,21 @@ pub struct Program {
 pub enum Statement {
     Let {
         name: String,
+        ty: TypeName,
         value: Expr,
     },
     Var {
         name: String,
+        ty: TypeName,
         value: Expr,
     },
     Assign {
         name: String,
         value: Expr,
+    },
+    Struct {
+        name: String,
+        fields: Vec<Param>,
     },
     Fn {
         name: String,
@@ -27,6 +33,21 @@ pub enum Statement {
         condition: Expr,
         body: Vec<Statement>,
     },
+    For {
+        name: String,
+        iterable: Expr,
+        body: Vec<Statement>,
+    },
+    If {
+        condition: Expr,
+        then_branch: Vec<Statement>,
+        else_branch: Vec<Statement>,
+    },
+    Return {
+        value: Option<Expr>,
+    },
+    Break,
+    Continue,
     Expr(Expr),
 }
 
@@ -43,6 +64,8 @@ pub enum TypeName {
     Bool,
     Str,
     Unit,
+    Struct(String),
+    Array(Box<TypeName>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +86,19 @@ pub enum Expr {
     Call {
         callee: String,
         args: Vec<Expr>,
+    },
+    StructInit {
+        name: String,
+        fields: Vec<(String, Expr)>,
+    },
+    Field {
+        object: Box<Expr>,
+        field: String,
+    },
+    Array(Vec<Expr>),
+    Index {
+        collection: Box<Expr>,
+        index: Box<Expr>,
     },
     If {
         condition: Box<Expr>,

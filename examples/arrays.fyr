@@ -1,0 +1,12 @@
+fn sum(values: [i64]) -> i64:
+    var total = 0
+    for value in values:
+        total = total + value
+    return total
+
+let values = [3, 5, 8, 13]
+let more_values = values + [21]
+let empty: [i64] = []
+print(sum(more_values))
+print(more_values[2])
+print(len(empty))
