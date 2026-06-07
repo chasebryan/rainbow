@@ -1,20 +1,25 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
-use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
+use crate::ast::{
+    BinaryOp, Expr, MatchArm, MatchPattern, Param, Program, Statement, TypeName, UnaryOp,
+};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::span::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Infer,
+    Nil,
     Never,
     I64,
+    F64,
     Bool,
     Str,
     Unit,
     Struct(String),
     Array(Box<Type>),
+    Nullable(Box<Type>),
     Function {
         params: Vec<Type>,
         return_type: Box<Type>,
@@ -25,13 +30,16 @@ impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Infer => write!(f, "infer"),
+            Type::Nil => write!(f, "nil"),
             Type::Never => write!(f, "never"),
             Type::I64 => write!(f, "i64"),
+            Type::F64 => write!(f, "f64"),
             Type::Bool => write!(f, "bool"),
             Type::Str => write!(f, "str"),
             Type::Unit => write!(f, "unit"),
             Type::Struct(name) => write!(f, "{name}"),
             Type::Array(element) => write!(f, "[{element}]"),
+            Type::Nullable(inner) => write!(f, "{inner}?"),
             Type::Function {
                 params,
                 return_type,
@@ -54,6 +62,7 @@ pub fn check(program: &Program) -> FyrResult<()> {
 struct Checker {
     scopes: Vec<HashMap<String, Binding>>,
     structs: HashMap<String, Vec<Param>>,
+    enums: HashMap<String, Vec<String>>,
     return_types: Vec<Type>,
     loop_depth: usize,
 }
@@ -69,12 +78,14 @@ impl Checker {
         Self {
             scopes: vec![HashMap::new()],
             structs: HashMap::new(),
+            enums: HashMap::new(),
             return_types: Vec::new(),
             loop_depth: 0,
         }
     }
 
     fn check_program(mut self, program: &Program) -> FyrResult<()> {
+        self.predeclare_enums(&program.statements)?;
         self.predeclare_structs(&program.statements)?;
         self.predeclare_functions(&program.statements)?;
 
@@ -85,12 +96,37 @@ impl Checker {
         Ok(())
     }
 
+    fn predeclare_enums(&mut self, statements: &[Statement]) -> FyrResult<()> {
+        for statement in statements {
+            if let Statement::Enum { name, variants, .. } = statement {
+                let span = statement.span();
+                let source_path = statement.source_path();
+                if self.enums.contains_key(name)
+                    || self.structs.contains_key(name)
+                    || self.current_scope().contains_key(name)
+                {
+                    return Err(type_error(format!("enum '{name}' already exists"))
+                        .with_fallback_location(span, source_path));
+                }
+                reject_duplicate_names("enum", name, "variant", variants)
+                    .map_err(|error| error.with_fallback_location(span, source_path))?;
+
+                self.enums.insert(name.clone(), variants.clone());
+            }
+        }
+
+        Ok(())
+    }
+
     fn predeclare_structs(&mut self, statements: &[Statement]) -> FyrResult<()> {
         for statement in statements {
             if let Statement::Struct { name, fields, .. } = statement {
                 let span = statement.span();
                 let source_path = statement.source_path();
-                if self.structs.contains_key(name) || self.current_scope().contains_key(name) {
+                if self.structs.contains_key(name)
+                    || self.enums.contains_key(name)
+                    || self.current_scope().contains_key(name)
+                {
                     return Err(type_error(format!("struct '{name}' already exists"))
                         .with_fallback_location(span, source_path));
                 }
@@ -137,6 +173,7 @@ impl Checker {
         let source_path = statement.source_path();
         let result = match statement {
             Statement::Struct { .. } => Ok(Type::Unit),
+            Statement::Enum { .. } => Ok(Type::Unit),
             Statement::Import { .. } => Ok(Type::Unit),
             Statement::Let {
                 name, ty, value, ..
@@ -157,7 +194,7 @@ impl Checker {
                     )));
                 }
 
-                if binding.ty != value_type {
+                if !type_compatible(&binding.ty, &value_type) {
                     return Err(type_error(format!(
                         "assignment to '{name}' expected {}, found {value_type}",
                         binding.ty
@@ -194,6 +231,13 @@ impl Checker {
                 else_branch,
                 ..
             } => self.check_if_statement(condition, then_branch, else_branch),
+            Statement::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => self.check_if_let_statement(name, value, then_branch, else_branch),
             Statement::Return { value, .. } => self.check_return(value.as_ref()),
             Statement::Break { .. } => {
                 if self.loop_depth == 0 {
@@ -229,13 +273,18 @@ impl Checker {
 
         let value_type = self.check_expr_with_hint(value, expected.as_ref())?;
         let binding_type = if let Some(expected) = expected {
-            if value_type != expected {
+            if !type_compatible(&expected, &value_type) {
                 return Err(type_error(format!(
                     "binding '{name}' expected {expected}, found {value_type}"
                 )));
             }
             expected
         } else {
+            if value_type == Type::Nil {
+                return Err(type_error(format!(
+                    "binding '{name}' needs an explicit nullable type for nil"
+                )));
+            }
             value_type
         };
 
@@ -265,7 +314,7 @@ impl Checker {
         self.return_types.pop();
         self.pop_scope();
 
-        if body_type != expected && body_type != Type::Never {
+        if !type_compatible(&expected, &body_type) && body_type != Type::Never {
             return Err(type_error(format!(
                 "function returns {body_type}, but signature says {expected}"
             )));
@@ -309,8 +358,13 @@ impl Checker {
     fn check_expr_with_hint(&mut self, expr: &Expr, expected: Option<&Type>) -> FyrResult<Type> {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
+            Expr::Float(_) => Ok(Type::F64),
             Expr::Bool(_) => Ok(Type::Bool),
             Expr::Str(_) => Ok(Type::Str),
+            Expr::Nil => match expected {
+                Some(expected @ Type::Nullable(_)) => Ok(expected.clone()),
+                _ => Ok(Type::Nil),
+            },
             Expr::Variable(name) => self
                 .lookup(name)
                 .map(|binding| binding.ty.clone())
@@ -319,12 +373,13 @@ impl Checker {
                 let expr_type = self.check_expr(expr)?;
                 match (op, expr_type) {
                     (UnaryOp::Negate, Type::I64) => Ok(Type::I64),
+                    (UnaryOp::Negate, Type::F64) => Ok(Type::F64),
                     (UnaryOp::Not, Type::Bool) => Ok(Type::Bool),
-                    (UnaryOp::Negate, found) => Err(expected_type("i64", &found)),
+                    (UnaryOp::Negate, found) => Err(expected_type("i64 or f64", &found)),
                     (UnaryOp::Not, found) => Err(expected_type("bool", &found)),
                 }
             }
-            Expr::Binary { left, op, right } => self.check_binary(left, *op, right),
+            Expr::Binary { left, op, right } => self.check_binary(left, *op, right, expected),
             Expr::Call { callee, args } => self.check_call(callee, args, expected),
             Expr::StructInit { name, fields } => self.check_struct_init(name, fields),
             Expr::Field { object, field } => self.check_field(object, field),
@@ -335,6 +390,13 @@ impl Checker {
                 then_branch,
                 else_branch,
             } => self.check_if(condition, then_branch, else_branch),
+            Expr::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+            } => self.check_if_let(name, value, then_branch, else_branch),
+            Expr::Match { value, arms } => self.check_match(value, arms),
         }
     }
 
@@ -351,22 +413,32 @@ impl Checker {
             return Err(type_error("empty array literals need an element type"));
         };
 
-        let element_type = self.check_expr_with_hint(first, expected_element)?;
+        if let Some(expected_element) = expected_element {
+            for element in elements {
+                let found = self.check_expr_with_hint(element, Some(expected_element))?;
+                if !type_compatible(expected_element, &found) {
+                    return Err(type_error(format!(
+                        "array element expected {expected_element}, found {found}"
+                    )));
+                }
+            }
+
+            return Ok(Type::Array(Box::new(expected_element.clone())));
+        }
+
+        let element_type = self.check_expr_with_hint(first, None)?;
+        if element_type == Type::Nil {
+            return Err(type_error(
+                "nil array elements need an expected nullable type",
+            ));
+        }
         for element in elements.iter().skip(1) {
-            let found = self.check_expr_with_hint(element, expected_element)?;
+            let found = self.check_expr_with_hint(element, None)?;
             if found != element_type {
                 return Err(type_error(format!(
                     "array element expected {element_type}, found {found}"
                 )));
             }
-        }
-
-        if let Some(expected_element) = expected_element
-            && element_type != *expected_element
-        {
-            return Err(type_error(format!(
-                "array element expected {expected_element}, found {element_type}"
-            )));
         }
 
         Ok(Type::Array(Box::new(element_type)))
@@ -424,8 +496,8 @@ impl Checker {
             };
 
             let expected = field.ty.as_type();
-            let found = self.check_expr(value)?;
-            if found != expected {
+            let found = self.check_expr_with_hint(value, Some(&expected))?;
+            if !type_compatible(&expected, &found) {
                 return Err(type_error(format!(
                     "field '{field_name}' expected {expected}, found {found}"
                 )));
@@ -445,6 +517,18 @@ impl Checker {
     }
 
     fn check_field(&mut self, object: &Expr, field_name: &str) -> FyrResult<Type> {
+        if let Expr::Variable(enum_name) = object
+            && let Some(variants) = self.enums.get(enum_name)
+        {
+            if variants.iter().any(|variant| variant == field_name) {
+                return Ok(Type::Struct(enum_name.clone()));
+            }
+
+            return Err(type_error(format!(
+                "enum '{enum_name}' has no variant '{field_name}'"
+            )));
+        }
+
         let object_type = self.check_expr(object)?;
         let Type::Struct(struct_name) = object_type else {
             return Err(type_error(format!(
@@ -468,7 +552,17 @@ impl Checker {
         Ok(field.ty.as_type())
     }
 
-    fn check_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> FyrResult<Type> {
+    fn check_binary(
+        &mut self,
+        left: &Expr,
+        op: BinaryOp,
+        right: &Expr,
+        expected: Option<&Type>,
+    ) -> FyrResult<Type> {
+        if op == BinaryOp::Coalesce {
+            return self.check_coalesce(left, right, expected);
+        }
+
         if op == BinaryOp::Add {
             return self.check_add(left, right);
         }
@@ -482,13 +576,23 @@ impl Checker {
             {
                 Ok(Type::I64)
             }
+            BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder
+                if left_type == Type::F64 && right_type == Type::F64 =>
+            {
+                Ok(Type::F64)
+            }
             BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual
                 if left_type == Type::I64 && right_type == Type::I64 =>
             {
                 Ok(Type::Bool)
             }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual
+                if left_type == Type::F64 && right_type == Type::F64 =>
+            {
+                Ok(Type::Bool)
+            }
             BinaryOp::Equal | BinaryOp::NotEqual
-                if left_type == right_type && is_equatable_type(&left_type) =>
+                if equality_compatible(&left_type, &right_type) =>
             {
                 Ok(Type::Bool)
             }
@@ -500,6 +604,43 @@ impl Checker {
             }
             _ => Err(type_error(format!(
                 "operator '{op:?}' cannot be applied to {left_type} and {right_type}"
+            ))),
+        }
+    }
+
+    fn check_coalesce(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        expected: Option<&Type>,
+    ) -> FyrResult<Type> {
+        let left_type = self.check_expr(left)?;
+
+        match left_type {
+            Type::Nullable(inner) => {
+                let nullable_type = Type::Nullable(inner.clone());
+                let found = self.check_expr_with_hint(right, Some(&inner))?;
+                if type_compatible(&inner, &found) {
+                    return Ok(*inner);
+                }
+
+                if type_compatible(&nullable_type, &found) {
+                    return Ok(nullable_type);
+                }
+
+                Err(type_error(format!(
+                    "coalesce fallback expected {inner} or {nullable_type}, found {found}"
+                )))
+            }
+            Type::Nil => {
+                let found = self.check_expr_with_hint(right, expected)?;
+                if found == Type::Nil {
+                    return Err(type_error("coalesce fallback needs a concrete type"));
+                }
+                Ok(found)
+            }
+            found => Err(type_error(format!(
+                "coalesce left operand expected nullable, found {found}"
             ))),
         }
     }
@@ -532,6 +673,16 @@ impl Checker {
                     )))
                 }
             }
+            Type::F64 => {
+                let right_type = self.check_expr(right)?;
+                if right_type == Type::F64 {
+                    Ok(Type::F64)
+                } else {
+                    Err(type_error(format!(
+                        "operator 'Add' cannot be applied to {left_type} and {right_type}"
+                    )))
+                }
+            }
             Type::Str => {
                 let right_type = self.check_expr(right)?;
                 if right_type == Type::Str {
@@ -544,7 +695,7 @@ impl Checker {
             }
             Type::Array(_) => {
                 let right_type = self.check_expr_with_hint(right, Some(&left_type))?;
-                if right_type == left_type {
+                if type_compatible(&left_type, &right_type) {
                     Ok(left_type)
                 } else {
                     Err(type_error(format!(
@@ -568,6 +719,8 @@ impl Checker {
         expected: Option<&Type>,
     ) -> FyrResult<Type> {
         match callee {
+            "i64" => self.check_numeric_conversion(callee, args, Type::I64),
+            "f64" => self.check_numeric_conversion(callee, args, Type::F64),
             "len" => {
                 if args.len() != 1 {
                     return Err(type_error("len expects exactly one argument"));
@@ -635,7 +788,7 @@ impl Checker {
                         }
 
                         let found = self.check_expr_with_hint(&args[1], Some(&element))?;
-                        if found != *element {
+                        if !type_compatible(&element, &found) {
                             return Err(type_error(format!(
                                 "contains expected {element}, found {found}"
                             )));
@@ -681,7 +834,7 @@ impl Checker {
                         }
 
                         let found = self.check_expr_with_hint(&args[1], Some(&element))?;
-                        if found != *element {
+                        if !type_compatible(&element, &found) {
                             return Err(type_error(format!(
                                 "find expected {element}, found {found}"
                             )));
@@ -727,7 +880,7 @@ impl Checker {
                         }
 
                         let found = self.check_expr_with_hint(&args[1], Some(&element))?;
-                        if found != *element {
+                        if !type_compatible(&element, &found) {
                             return Err(type_error(format!(
                                 "count expected {element}, found {found}"
                             )));
@@ -785,7 +938,7 @@ impl Checker {
                 match self.check_expr(&args[0])? {
                     Type::Array(element) => {
                         let found = self.check_expr_with_hint(&args[2], Some(&element))?;
-                        if found != *element {
+                        if !type_compatible(&element, &found) {
                             return Err(type_error(format!(
                                 "get default expected {element}, found {found}"
                             )));
@@ -818,7 +971,7 @@ impl Checker {
                     };
                     let found = self.check_expr_with_hint(&args[1], expected_element)?;
                     if let Some(expected_element) = expected_element
-                        && found != *expected_element
+                        && !type_compatible(expected_element, &found)
                     {
                         return Err(type_error(format!(
                             "append expected {expected_element}, found {found}"
@@ -835,7 +988,7 @@ impl Checker {
                 };
 
                 let found = self.check_expr_with_hint(&args[1], Some(&element))?;
-                if found != *element {
+                if !type_compatible(&element, &found) {
                     return Err(type_error(format!(
                         "append expected {element}, found {found}"
                     )));
@@ -938,8 +1091,8 @@ impl Checker {
                 }
 
                 for (index, (arg, expected)) in args.iter().zip(params.iter()).enumerate() {
-                    let found = self.check_expr(arg)?;
-                    if &found != expected {
+                    let found = self.check_expr_with_hint(arg, Some(expected))?;
+                    if !type_compatible(expected, &found) {
                         return Err(type_error(format!(
                             "argument {} for {callee} expected {expected}, found {found}",
                             index + 1
@@ -949,6 +1102,24 @@ impl Checker {
 
                 Ok(*return_type)
             }
+        }
+    }
+
+    fn check_numeric_conversion(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        result: Type,
+    ) -> FyrResult<Type> {
+        if args.len() != 1 {
+            return Err(type_error(format!("{name} expects exactly one argument")));
+        }
+
+        match self.check_expr(&args[0])? {
+            Type::I64 | Type::F64 => Ok(result),
+            found => Err(type_error(format!(
+                "{name} conversion expects i64 or f64, found {found}"
+            ))),
         }
     }
 
@@ -1033,7 +1204,7 @@ impl Checker {
         match self.check_expr(&args[0])? {
             Type::Array(element) => {
                 let found = self.check_expr_with_hint(&args[1], Some(&element))?;
-                if found != *element {
+                if !type_compatible(&element, &found) {
                     return Err(type_error(format!(
                         "{name} default expected {element}, found {found}"
                     )));
@@ -1094,17 +1265,146 @@ impl Checker {
         self.check_if(condition, then_branch, else_branch)
     }
 
+    fn check_if_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        then_branch: &[Statement],
+        else_branch: &[Statement],
+    ) -> FyrResult<Type> {
+        let inner_type = self.check_if_let_value(value)?;
+        let then_type = self.check_if_let_then(name, inner_type, then_branch)?;
+        let else_type = self.check_block_scoped(else_branch)?;
+
+        match merge_branch_types(then_type, else_type) {
+            Some(ty) => Ok(ty),
+            None => Err(type_error("if let branches must have the same type")),
+        }
+    }
+
+    fn check_if_let_statement(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        then_branch: &[Statement],
+        else_branch: &[Statement],
+    ) -> FyrResult<Type> {
+        let inner_type = self.check_if_let_value(value)?;
+
+        if !if_chain_has_final_else(else_branch) {
+            self.check_if_let_then(name, inner_type, then_branch)?;
+            self.check_block_scoped(else_branch)?;
+            return Ok(Type::Unit);
+        }
+
+        let then_type = self.check_if_let_then(name, inner_type, then_branch)?;
+        let else_type = self.check_block_scoped(else_branch)?;
+
+        match merge_branch_types(then_type, else_type) {
+            Some(ty) => Ok(ty),
+            None => Err(type_error("if let branches must have the same type")),
+        }
+    }
+
+    fn check_if_let_value(&mut self, value: &Expr) -> FyrResult<Type> {
+        match self.check_expr(value)? {
+            Type::Nullable(inner) => Ok(*inner),
+            found => Err(type_error(format!(
+                "if let expected nullable, found {found}"
+            ))),
+        }
+    }
+
+    fn check_if_let_then(
+        &mut self,
+        name: &str,
+        binding_type: Type,
+        then_branch: &[Statement],
+    ) -> FyrResult<Type> {
+        self.push_scope();
+        self.define(name, binding_type, false)?;
+        let result = self.check_block(then_branch);
+        self.pop_scope();
+        result
+    }
+
+    fn check_match(&mut self, value: &Expr, arms: &[MatchArm]) -> FyrResult<Type> {
+        let Type::Struct(enum_name) = self.check_expr(value)? else {
+            return Err(type_error("match expected an enum value"));
+        };
+        let variants = self
+            .enums
+            .get(&enum_name)
+            .cloned()
+            .ok_or_else(|| type_error(format!("match expected an enum, found {enum_name}")))?;
+
+        let mut seen = HashSet::new();
+        let mut saw_else = false;
+        let mut result_type: Option<Type> = None;
+
+        for arm in arms {
+            if saw_else {
+                return Err(type_error("match else arm must be last"));
+            }
+
+            match &arm.pattern {
+                MatchPattern::Variant {
+                    enum_name: arm_enum,
+                    variant,
+                } => {
+                    if arm_enum != &enum_name {
+                        return Err(type_error(format!(
+                            "match arm expected {enum_name}, found {arm_enum}.{variant}"
+                        )));
+                    }
+                    if !variants.iter().any(|declared| declared == variant) {
+                        return Err(type_error(format!(
+                            "enum '{enum_name}' has no variant '{variant}'"
+                        )));
+                    }
+                    if !seen.insert(variant.clone()) {
+                        return Err(type_error(format!(
+                            "match has duplicate arm for {enum_name}.{variant}"
+                        )));
+                    }
+                }
+                MatchPattern::Else => {
+                    saw_else = true;
+                }
+            }
+
+            let arm_type = self.check_block_scoped(&arm.body)?;
+            result_type = Some(match result_type {
+                Some(current) => merge_branch_types(current, arm_type)
+                    .ok_or_else(|| type_error("match arms must have the same type"))?,
+                None => arm_type,
+            });
+        }
+
+        if !saw_else {
+            for variant in &variants {
+                if !seen.contains(variant) {
+                    return Err(type_error(format!(
+                        "match missing arm for {enum_name}.{variant}"
+                    )));
+                }
+            }
+        }
+
+        result_type.ok_or_else(|| type_error("match needs at least one arm"))
+    }
+
     fn check_return(&mut self, value: Option<&Expr>) -> FyrResult<Type> {
         let Some(expected) = self.return_types.last().cloned() else {
             return Err(type_error("return outside function"));
         };
 
         let found = match value {
-            Some(value) => self.check_expr(value)?,
+            Some(value) => self.check_expr_with_hint(value, Some(&expected))?,
             None => Type::Unit,
         };
 
-        if found != expected && found != Type::Never {
+        if !type_compatible(&expected, &found) && found != Type::Never {
             return Err(type_error(format!(
                 "return expected {expected}, found {found}"
             )));
@@ -1169,7 +1469,10 @@ impl Checker {
     }
 
     fn define(&mut self, name: &str, ty: Type, mutable: bool) -> FyrResult<()> {
-        if self.structs.contains_key(name) || self.current_scope().contains_key(name) {
+        if self.structs.contains_key(name)
+            || self.enums.contains_key(name)
+            || self.current_scope().contains_key(name)
+        {
             return Err(type_error(format!("binding '{name}' already exists")));
         }
 
@@ -1201,11 +1504,13 @@ impl TypeName {
         match self {
             TypeName::Infer => Type::Infer,
             TypeName::I64 => Type::I64,
+            TypeName::F64 => Type::F64,
             TypeName::Bool => Type::Bool,
             TypeName::Str => Type::Str,
             TypeName::Unit => Type::Unit,
             TypeName::Struct(name) => Type::Struct(name.clone()),
             TypeName::Array(element) => Type::Array(Box::new(element.as_type())),
+            TypeName::Nullable(inner) => Type::Nullable(Box::new(inner.as_type())),
         }
     }
 }
@@ -1213,12 +1518,17 @@ impl TypeName {
 impl Checker {
     fn validate_type_name(&self, ty: &TypeName) -> FyrResult<()> {
         match ty {
-            TypeName::Infer | TypeName::I64 | TypeName::Bool | TypeName::Str | TypeName::Unit => {
-                Ok(())
-            }
+            TypeName::Infer
+            | TypeName::I64
+            | TypeName::F64
+            | TypeName::Bool
+            | TypeName::Str
+            | TypeName::Unit => Ok(()),
             TypeName::Struct(name) if self.structs.contains_key(name) => Ok(()),
+            TypeName::Struct(name) if self.enums.contains_key(name) => Ok(()),
             TypeName::Struct(name) => Err(type_error(format!("unknown type '{name}'"))),
             TypeName::Array(element) => self.validate_type_name(element),
+            TypeName::Nullable(inner) => self.validate_type_name(inner),
         }
     }
 }
@@ -1266,11 +1576,38 @@ fn reject_duplicate_members(
     Ok(())
 }
 
+fn reject_duplicate_names(
+    owner_kind: &str,
+    owner_name: &str,
+    member_kind: &str,
+    members: &[String],
+) -> FyrResult<()> {
+    let mut seen = HashSet::new();
+
+    for member in members {
+        if !seen.insert(member.as_str()) {
+            return Err(type_error(format!(
+                "{owner_kind} '{owner_name}' has duplicate {member_kind} '{member}'"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn merge_branch_types(left: Type, right: Type) -> Option<Type> {
     match (left, right) {
         (Type::Never, Type::Never) => Some(Type::Never),
         (Type::Never, ty) | (ty, Type::Never) => Some(ty),
         (left, right) if left == right => Some(left),
+        (Type::Nullable(inner), found) | (found, Type::Nullable(inner))
+            if type_compatible(&Type::Nullable(inner.clone()), &found) =>
+        {
+            Some(Type::Nullable(inner))
+        }
+        (Type::Nil, ty) | (ty, Type::Nil) if is_nullable_base_type(&ty) => {
+            Some(Type::Nullable(Box::new(ty)))
+        }
         _ => None,
     }
 }
@@ -1278,17 +1615,62 @@ fn merge_branch_types(left: Type, right: Type) -> Option<Type> {
 fn if_chain_has_final_else(else_branch: &[Statement]) -> bool {
     match else_branch {
         [] => false,
-        [Statement::If { else_branch, .. }] => if_chain_has_final_else(else_branch),
+        [Statement::If { else_branch, .. }] | [Statement::IfLet { else_branch, .. }] => {
+            if_chain_has_final_else(else_branch)
+        }
         _ => true,
     }
 }
 
 fn is_equatable_type(ty: &Type) -> bool {
     match ty {
-        Type::I64 | Type::Bool | Type::Str | Type::Unit | Type::Struct(_) => true,
+        Type::Nil
+        | Type::I64
+        | Type::F64
+        | Type::Bool
+        | Type::Str
+        | Type::Unit
+        | Type::Struct(_) => true,
         Type::Array(element) => is_equatable_type(element),
+        Type::Nullable(inner) => is_equatable_type(inner),
         Type::Infer | Type::Never | Type::Function { .. } => false,
     }
+}
+
+fn equality_compatible(left: &Type, right: &Type) -> bool {
+    if left == right {
+        return is_equatable_type(left);
+    }
+
+    if type_compatible(left, right) {
+        return is_equatable_type(left);
+    }
+
+    if type_compatible(right, left) {
+        return is_equatable_type(right);
+    }
+
+    false
+}
+
+fn type_compatible(expected: &Type, found: &Type) -> bool {
+    if expected == found || *found == Type::Never {
+        return true;
+    }
+
+    match (expected, found) {
+        (Type::Nullable(inner), Type::Nil) => is_nullable_base_type(inner),
+        (Type::Nullable(inner), found) => type_compatible(inner, found),
+        (Type::Array(expected), Type::Array(found)) => type_compatible(expected, found),
+        _ => false,
+    }
+}
+
+fn is_nullable_base_type(ty: &Type) -> bool {
+    !matches!(
+        ty,
+        Type::Infer | Type::Nil | Type::Never | Type::Function { .. }
+    )
 }
 
 fn is_empty_array_literal(expr: &Expr) -> bool {
@@ -1664,6 +2046,216 @@ length_squared(p)
     }
 
     #[test]
+    fn accepts_enum_variants_and_nominal_annotations() {
+        typecheck(
+            r#"
+enum Status:
+    Pending
+    Ready
+
+fn is_ready(status: Status) -> bool:
+    return status == Status.Ready
+
+let status: Status = Status.Ready
+let history: [Status] = [Status.Pending, status]
+assert(is_ready(status))
+assert(contains(history, Status.Pending))
+"#,
+        )
+        .expect("enum program should typecheck");
+    }
+
+    #[test]
+    fn accepts_exhaustive_enum_match_expressions() {
+        typecheck(
+            r#"
+enum Status:
+    Pending
+    Ready
+    Failed
+
+fn describe(status: Status) -> str:
+    return match status:
+        Status.Pending:
+            "pending"
+        Status.Ready:
+            "ready"
+        Status.Failed:
+            "failed"
+
+let status = Status.Ready
+let label: str = describe(status)
+"#,
+        )
+        .expect("exhaustive enum match should typecheck");
+    }
+
+    #[test]
+    fn accepts_enum_match_else_fallback() {
+        typecheck(
+            r#"
+enum Status:
+    Pending
+    Ready
+    Failed
+
+fn describe(status: Status) -> str:
+    return match status:
+        Status.Ready:
+            "ready"
+        else:
+            "not ready"
+
+let failed = describe(Status.Failed)
+let pending = describe(Status.Pending)
+"#,
+        )
+        .expect("enum match fallback should typecheck");
+    }
+
+    #[test]
+    fn rejects_invalid_enum_match_expressions() {
+        let non_enum = typecheck(
+            r#"
+let label = match 1:
+    else:
+        "one"
+"#,
+        )
+        .expect_err("non-enum match value should fail");
+        assert!(non_enum.message.contains("match expected an enum value"));
+
+        let missing = typecheck(
+            r#"
+enum Status:
+    Pending
+    Ready
+
+let label = match Status.Ready:
+    Status.Ready:
+        "ready"
+"#,
+        )
+        .expect_err("missing enum arm should fail");
+        assert!(
+            missing
+                .message
+                .contains("match missing arm for Status.Pending")
+        );
+
+        let duplicate = typecheck(
+            r#"
+enum Status:
+    Ready
+
+let label = match Status.Ready:
+    Status.Ready:
+        "ready"
+    Status.Ready:
+        "again"
+"#,
+        )
+        .expect_err("duplicate enum arm should fail");
+        assert!(
+            duplicate
+                .message
+                .contains("match has duplicate arm for Status.Ready")
+        );
+
+        let wrong_enum = typecheck(
+            r#"
+enum Status:
+    Ready
+
+enum Mode:
+    Ready
+
+let label = match Status.Ready:
+    Mode.Ready:
+        "ready"
+    else:
+        "other"
+"#,
+        )
+        .expect_err("wrong enum arm should fail");
+        assert!(
+            wrong_enum
+                .message
+                .contains("match arm expected Status, found Mode.Ready")
+        );
+
+        let branch_mismatch = typecheck(
+            r#"
+enum Status:
+    Pending
+    Ready
+
+let label = match Status.Pending:
+    Status.Pending:
+        "pending"
+    Status.Ready:
+        1
+"#,
+        )
+        .expect_err("mismatched match arms should fail");
+        assert!(
+            branch_mismatch
+                .message
+                .contains("match arms must have the same type")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_enum_uses() {
+        let duplicate = typecheck(
+            r#"
+enum Status:
+    Ready
+    Ready
+"#,
+        )
+        .expect_err("duplicate enum variants should fail");
+        assert!(
+            duplicate
+                .message
+                .contains("enum 'Status' has duplicate variant 'Ready'")
+        );
+
+        let unknown_variant = typecheck(
+            r#"
+enum Status:
+    Ready
+
+let status = Status.Pending
+"#,
+        )
+        .expect_err("unknown enum variant should fail");
+        assert!(
+            unknown_variant
+                .message
+                .contains("enum 'Status' has no variant 'Pending'")
+        );
+
+        let annotation = typecheck(
+            r#"
+enum Status:
+    Ready
+
+enum Mode:
+    Ready
+
+let status: Status = Mode.Ready
+"#,
+        )
+        .expect_err("wrong enum type should fail");
+        assert!(
+            annotation
+                .message
+                .contains("binding 'status' expected Status, found Mode")
+        );
+    }
+
+    #[test]
     fn rejects_struct_field_type_mismatch() {
         let error = typecheck(
             r#"
@@ -1829,6 +2421,257 @@ len(values) + limit
 "#,
         )
         .expect("annotated bindings should typecheck");
+    }
+
+    #[test]
+    fn accepts_f64_arithmetic_comparison_and_nullable_recovery() {
+        typecheck(
+            r#"
+fn average(total: f64, count: f64) -> f64:
+    return total / count
+
+let radius: f64 = 2.5
+let area: f64 = 3.14 * radius * radius
+let shifted: f64 = -area + 20.0
+let maybe: f64? = nil
+let recovered: f64 = maybe ?? average(7.5, 3.0)
+assert(area > 19.6 and area < 19.7)
+assert(shifted > 0.3)
+assert(recovered == 2.5)
+"#,
+        )
+        .expect("f64 arithmetic should typecheck");
+    }
+
+    #[test]
+    fn accepts_explicit_numeric_conversions() {
+        typecheck(
+            r#"
+let count: i64 = 4
+let total: f64 = f64(count) + 2.5
+let rounded: i64 = i64(total - 0.5)
+assert(rounded == 6)
+"#,
+        )
+        .expect("explicit numeric conversions should typecheck");
+    }
+
+    #[test]
+    fn rejects_numeric_conversion_type_errors() {
+        let bad_input = typecheck("let value = f64(\"3\")\n")
+            .expect_err("string conversion should fail at typecheck time");
+        assert!(
+            bad_input
+                .message
+                .contains("f64 conversion expects i64 or f64")
+        );
+
+        let bad_arity =
+            typecheck("let value = i64(1, 2)\n").expect_err("conversion arity should fail");
+        assert!(
+            bad_arity
+                .message
+                .contains("i64 expects exactly one argument")
+        );
+    }
+
+    #[test]
+    fn rejects_mixed_numeric_types() {
+        let add = typecheck("let value = 1 + 2.0\n").expect_err("mixed add should fail");
+        assert!(
+            add.message
+                .contains("operator 'Add' cannot be applied to i64 and f64")
+        );
+
+        let annotation =
+            typecheck("let value: f64 = 1\n").expect_err("i64 should not flow into f64");
+        assert!(
+            annotation
+                .message
+                .contains("binding 'value' expected f64, found i64")
+        );
+
+        let comparison =
+            typecheck("let value = 1.0 < 2\n").expect_err("mixed comparison should fail");
+        assert!(
+            comparison
+                .message
+                .contains("operator 'Less' cannot be applied to f64 and i64")
+        );
+    }
+
+    #[test]
+    fn accepts_nullable_bindings_arrays_returns_and_comparisons() {
+        typecheck(
+            r#"
+fn maybe(flag: bool) -> i64?:
+    if flag:
+        return 42
+    else:
+        return nil
+
+let missing: i64? = nil
+let present: i64? = 7
+var current: i64? = missing
+current = 9
+let values: [i64?] = [nil, 1, present]
+assert(maybe(true) != nil)
+assert(maybe(false) == nil)
+assert(contains(values, nil))
+assert(contains(values, 1))
+"#,
+        )
+        .expect("nullable values should typecheck");
+    }
+
+    #[test]
+    fn accepts_coalesce_for_nullable_values() {
+        typecheck(
+            r#"
+fn maybe(flag: bool) -> i64?:
+    if flag:
+        return 42
+    else:
+        return nil
+
+let missing: i64? = nil
+let present: i64? = 7
+let recovered: i64 = missing ?? 10
+let chosen: i64 = present ?? 99
+let chained: i64 = missing ?? maybe(false) ?? 12
+let from_nil: i64 = nil ?? 5
+let maybe_ready: bool? = nil
+if maybe_ready ?? false:
+    assert(false)
+else:
+    assert(true)
+"#,
+        )
+        .expect("coalesce should safely unwrap nullable values");
+    }
+
+    #[test]
+    fn accepts_if_let_nullable_narrowing() {
+        typecheck(
+            r#"
+fn maybe(flag: bool) -> i64?:
+    if flag:
+        return 42
+    else:
+        return nil
+
+let recovered = if let value = maybe(true):
+    value + 1
+else:
+    0
+
+if let value = maybe(false):
+    assert(value > 0)
+elif let fallback = maybe(true):
+    assert(fallback == 42)
+else:
+    assert(recovered == 43)
+"#,
+        )
+        .expect("if let should narrow nullable values");
+    }
+
+    #[test]
+    fn rejects_invalid_if_let_uses() {
+        let non_nullable =
+            typecheck("if let value = 42:\n    print(value)\n").expect_err("plain i64 should fail");
+        assert!(non_nullable.message.contains("if let expected nullable"));
+
+        let leaked = typecheck(
+            r#"
+let maybe: i64? = 42
+if let value = maybe:
+    print(value)
+print(value)
+"#,
+        )
+        .expect_err("if let binding should stay scoped to branch");
+        assert!(leaked.message.contains("unknown binding 'value'"));
+
+        let mismatched = typecheck(
+            r#"
+let maybe: i64? = nil
+let value = if let found = maybe:
+    found
+else:
+    "missing"
+"#,
+        )
+        .expect_err("if let expression branches should agree");
+        assert!(
+            mismatched
+                .message
+                .contains("if let branches must have the same type")
+        );
+    }
+
+    #[test]
+    fn rejects_untyped_and_narrowed_nil_values() {
+        let untyped = typecheck("let missing = nil\n").expect_err("untyped nil should fail");
+        assert!(untyped.message.contains("explicit nullable type"));
+
+        let non_nullable =
+            typecheck("let value: i64 = nil\n").expect_err("nil into i64 should fail");
+        assert!(
+            non_nullable
+                .message
+                .contains("binding 'value' expected i64, found nil")
+        );
+
+        let narrowed = typecheck(
+            r#"
+let maybe: i64? = 1
+let value: i64 = maybe
+"#,
+        )
+        .expect_err("nullable to plain value should fail");
+        assert!(
+            narrowed
+                .message
+                .contains("binding 'value' expected i64, found i64?")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_coalesce_operands() {
+        let plain_left =
+            typecheck("let value = 1 ?? 2\n").expect_err("non-null coalesce left side should fail");
+        assert!(
+            plain_left
+                .message
+                .contains("coalesce left operand expected nullable")
+        );
+
+        let wrong_fallback = typecheck(
+            r#"
+let maybe: i64? = nil
+let value = maybe ?? "missing"
+"#,
+        )
+        .expect_err("wrong fallback should fail");
+        assert!(
+            wrong_fallback
+                .message
+                .contains("coalesce fallback expected i64")
+        );
+
+        let nullable_result = typecheck(
+            r#"
+let maybe: i64? = nil
+let value: i64 = maybe ?? nil
+"#,
+        )
+        .expect_err("nullable result cannot narrow into i64");
+        assert!(
+            nullable_result
+                .message
+                .contains("binding 'value' expected i64, found i64?")
+        );
     }
 
     #[test]

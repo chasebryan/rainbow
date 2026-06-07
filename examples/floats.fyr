@@ -1,0 +1,17 @@
+fn average(total: f64, count: f64) -> f64:
+    return total / count
+let radius: f64 = 2.5
+let area = 3.14 * radius * radius
+let samples: i64 = 3
+let average_score = average(7.5, 3.0)
+let adjusted = f64(samples) + average_score
+let whole = i64(adjusted - 0.5)
+let missing: f64? = nil
+let recovered = missing ?? average_score
+assert(area > 19.6 and area < 19.7, "f64 arithmetic should keep decimal precision")
+assert(average_score == 2.5, "f64 division should produce decimal values")
+assert(adjusted == 5.5, "explicit i64 to f64 conversion should allow numeric mixing")
+assert(whole == 5, "explicit f64 to i64 conversion should recover whole values")
+assert(recovered == 2.5, "f64 nullable coalescing should recover the fallback")
+assert(type(recovered) == "f64", "type should report f64 values")
+print(recovered)

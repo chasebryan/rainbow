@@ -21,6 +21,9 @@ cargo run -p fyr -- run examples/point.fyr
 cargo run -p fyr -- run examples/arrays.fyr
 cargo run -p fyr -- run examples/range.fyr
 cargo run -p fyr -- run examples/strings.fyr
+cargo run -p fyr -- run examples/floats.fyr
+cargo run -p fyr -- run examples/nil.fyr
+cargo run -p fyr -- run examples/enums.fyr
 cargo run -p fyr -- run examples/project/src/main.fyr
 cargo run -p fyr -- check examples
 cargo run -p fyr -- fmt --check examples
@@ -47,6 +50,7 @@ fyr check
 fyr fmt --check
 fyr test
 fyr build
+fyr /absolute/path/to/file.fyr
 fyr run /absolute/path/to/file.fyr
 fyr check /absolute/path/to/file-or-dir
 fyr fmt --check /absolute/path/to/file-or-dir
@@ -95,7 +99,7 @@ import "lib.fyr"
 print(greeting("Fyr"))
 ```
 
-Import paths are string literals that must be relative `.fyr` files. The CLI resolves imports before typechecking or running, detects cycles, and includes repeated imports once per root file. Syntax and formatting errors include the file path that failed, including imported files; type and runtime errors fall back to the original source statement location, including imported statements. File-backed diagnostics include nearby source lines with a caret underline when the source is available. Inside a project, imports are confined to the nearest `fyr.toml` project root.
+Import paths are string literals that must be relative `.fyr` files. The CLI resolves imports before typechecking or running, detects cycles, and includes repeated imports once per root file. Missing or invalid import paths report the import statement that failed. Syntax and formatting errors include the file path that failed, including imported files; type and runtime errors fall back to the original source statement location, including imported statements. File-backed diagnostics include nearby source lines with a caret underline when the source is available. Inside a project, imports are confined to the nearest `fyr.toml` project root.
 
 Build a project into a checked, import-flattened Fyr bundle:
 
@@ -187,6 +191,26 @@ struct Point:
 
 let p = Point { x: 3, y: 4 }
 print(p.x + p.y)
+```
+
+Enums define closed state sets and can be handled with exhaustive `match` expressions:
+
+```fyr
+enum Status:
+    Pending
+    Ready
+    Failed
+
+fn label(status: Status) -> str:
+    return match status:
+        Status.Pending:
+            "pending"
+        Status.Ready:
+            "ready"
+        Status.Failed:
+            "failed"
+
+print(label(Status.Ready))
 ```
 
 Arrays are homogeneous and bounds-checked:
@@ -310,21 +334,25 @@ fyr test examples
 
 The bootstrap supports:
 
-- integer, boolean, and string literals
+- integer, floating-point, boolean, and string literals
 - inferred and explicitly annotated `let` bindings
 - inferred and explicitly annotated mutable `var` bindings and assignment
-- checked integer arithmetic and comparison operators
-- value equality for primitives, arrays, structs, and `unit`
+- checked integer arithmetic plus finite `f64` arithmetic and comparison operators
+- explicit checked numeric conversions with `i64(value)` and `f64(value)`
+- value equality for primitives, arrays, structs, enums, and `unit`
+- `nil` values with explicit nullable `T?` annotations, safe `value ?? fallback` coalescing, and scoped `if let value = maybe:` unwrapping
 - boolean `and`, `or`, and `not`, with `&&`, `||`, and `!` aliases
 - string concatenation with `+`
 - typed function signatures with Python-style indented bodies
 - recursive function calls and local function declarations after the declaration point
 - checked function calls and return types
-- statement-style `if` / `elif` / `else` blocks and value-producing `if` / `elif` / `else` branches
+- statement-style `if` / `elif` / `else` blocks, scoped `if let` / `elif let` nullable unwrapping, and value-producing `if` / `elif` / `else` branches
 - `while` loops plus array and string `for value in values` loops
 - `return`, `break`, and `continue`
 - `struct` declarations, struct literals, and field access
-- homogeneous array literals, `[T]` annotations, typed empty arrays, append, reverse, first/last reads, concatenation with `+`, checked indexing, fallback reads, checked slicing, search/count helpers, emptiness checks, and `len(array)`
+- unit `enum` declarations with nominal variant values such as `Status.Ready`
+- exhaustive `match` expressions for enum variants, with `else` fallback arms when desired
+- homogeneous array literals, `[T]` and `[T?]` annotations, typed empty arrays, append, reverse, first/last reads, concatenation with `+`, checked indexing, fallback reads, checked slicing, search/count helpers, emptiness checks, and `len(array)`
 - checked string indexing, character iteration, concatenation, containment, slicing, fallback reads, search/count helpers, split/join helpers, trim/case helpers, prefix/suffix checks, replacement, reverse, first/last reads, emptiness checks, and `len(str)`
 - relative file imports with `import "path/to/file.fyr"` for multi-file programs and projects
 - built-in `print(value)`, `type(value)`, `len(value)`, `is_empty(value)`, `get(value, index, default)`, `first(value, default)`, `last(value, default)`, `reverse(value)`, `find(value, item)`, `count(value, item)`, `append(array, value)`, `contains(value, item)`, `slice(value, start, end)`, `split(text, separator)`, `join(parts, separator)`, `trim(text)`, `lower(text)`, `upper(text)`, `starts_with(text, prefix)`, `ends_with(text, suffix)`, `replace(text, old, new)`, end-exclusive `range(...)`, and `assert(...)`
@@ -336,9 +364,9 @@ The bootstrap supports:
 - `fyr test <path...>` assertion-file execution
 - one-statement-per-line scripts
 
-The bootstrap typechecker enforces `i64`, `bool`, `str`, `unit`, struct, and array types across function calls, return values, branch expressions, assignments, equality, indexing, and supported operators. Runtime integer arithmetic fails on overflow, division by zero, and remainder by zero instead of wrapping.
+The bootstrap typechecker enforces `i64`, `f64`, `bool`, `str`, `unit`, struct, enum, array, and nullable `T?` types across function calls, return values, branch expressions, `match` arms, assignments, equality, indexing, and supported operators. `i64` and `f64` do not implicitly mix yet; write `f64(count)` or `i64(score)` when a conversion is intentional. `i64(f64_value)` only accepts whole finite values in the exact integer range, and `f64(i64_value)` rejects precision-losing integers. `nil` requires an explicit nullable destination unless another branch or expected type supplies one. Use `maybe ?? fallback` to recover a concrete value with a fallback, or `if let value = maybe:` to bind the inner value only inside the present branch. Runtime integer arithmetic fails on overflow, division by zero, and remainder by zero instead of wrapping; `f64` arithmetic rejects divide/remainder by zero and non-finite results.
 
-The checker also rejects ambiguous declaration shapes such as duplicate bindings in the same scope, duplicate function parameters, duplicate struct fields, and value/function names that reuse a struct name.
+The checker also rejects ambiguous declaration shapes such as duplicate bindings in the same scope, duplicate function parameters, duplicate struct fields, duplicate enum variants, duplicate or missing enum match arms, and value/function names that reuse a nominal type name.
 
 Bootstrap `range` materializes an array and currently caps each range at 1,000,000 elements. Later iterator work should make counted loops lazy.
 

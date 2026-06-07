@@ -1,19 +1,30 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
+use crate::ast::{
+    BinaryOp, Expr, MatchArm, MatchPattern, Param, Program, Statement, TypeName, UnaryOp,
+};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::span::Span;
+
+const EXACT_F64_INTEGER_LIMIT: i64 = 9_007_199_254_740_992;
+const EXACT_F64_INTEGER_LIMIT_F64: f64 = 9_007_199_254_740_992.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
+    Float(f64),
     Bool(bool),
     Str(String),
+    Nil,
     Array(Vec<Value>),
     Struct {
         name: String,
         fields: HashMap<String, Value>,
+    },
+    Enum {
+        name: String,
+        variant: String,
     },
     Function(Function),
     Unit,
@@ -30,8 +41,10 @@ impl Display for Value {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Int(value) => write!(f, "{value}"),
+            Value::Float(value) => write!(f, "{}", format_float(*value)),
             Value::Bool(value) => write!(f, "{value}"),
             Value::Str(value) => write!(f, "{value}"),
+            Value::Nil => write!(f, "nil"),
             Value::Array(values) => {
                 let values = values
                     .iter()
@@ -41,6 +54,7 @@ impl Display for Value {
                 write!(f, "[{values}]")
             }
             Value::Struct { name, .. } => write!(f, "<{name}>"),
+            Value::Enum { name, variant } => write!(f, "{name}.{variant}"),
             Value::Function(_) => write!(f, "<fn>"),
             Value::Unit => write!(f, "()"),
         }
@@ -57,6 +71,7 @@ pub struct RunResult {
 pub struct Evaluator {
     scopes: Vec<HashMap<String, Binding>>,
     structs: HashMap<String, Vec<Param>>,
+    enums: HashMap<String, Vec<String>>,
     outputs: Vec<String>,
 }
 
@@ -118,11 +133,13 @@ impl Evaluator {
         Self {
             scopes: vec![HashMap::new()],
             structs: HashMap::new(),
+            enums: HashMap::new(),
             outputs: Vec::new(),
         }
     }
 
     pub fn run(mut self, program: &Program) -> FyrResult<RunResult> {
+        self.predefine_enums(&program.statements)?;
         self.predefine_structs(&program.statements)?;
         self.predefine_functions(&program.statements)?;
 
@@ -131,7 +148,10 @@ impl Evaluator {
         for statement in &program.statements {
             if matches!(
                 statement,
-                Statement::Struct { .. } | Statement::Fn { .. } | Statement::Import { .. }
+                Statement::Struct { .. }
+                    | Statement::Enum { .. }
+                    | Statement::Fn { .. }
+                    | Statement::Import { .. }
             ) {
                 last_value = Value::Unit;
                 continue;
@@ -161,6 +181,7 @@ impl Evaluator {
     }
 
     pub fn predefine_declarations(&mut self, statements: &[Statement]) -> FyrResult<()> {
+        self.predefine_enums(statements)?;
         self.predefine_structs(statements)?;
         self.predefine_functions(statements)?;
         Ok(())
@@ -172,6 +193,10 @@ impl Evaluator {
         let result = match statement {
             Statement::Struct { name, fields, .. } => {
                 self.define_struct(name, fields)?;
+                Ok(Flow::Value(Value::Unit))
+            }
+            Statement::Enum { name, variants, .. } => {
+                self.define_enum(name, variants)?;
                 Ok(Flow::Value(Value::Unit))
             }
             Statement::Import { .. } => Ok(Flow::Value(Value::Unit)),
@@ -219,6 +244,13 @@ impl Evaluator {
                 else_branch,
                 ..
             } => self.eval_if(condition, then_branch, else_branch),
+            Statement::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => self.eval_if_let(name, value, then_branch, else_branch),
             Statement::Return { value, .. } => {
                 let value = match value {
                     Some(value) => self.eval_value(value)?,
@@ -238,6 +270,16 @@ impl Evaluator {
         for statement in statements {
             if let Statement::Struct { name, fields, .. } = statement {
                 self.define_struct(name, fields)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn predefine_enums(&mut self, statements: &[Statement]) -> FyrResult<()> {
+        for statement in statements {
+            if let Statement::Enum { name, variants, .. } = statement {
+                self.define_enum(name, variants)?;
             }
         }
 
@@ -284,7 +326,10 @@ impl Evaluator {
     }
 
     fn define_struct(&mut self, name: &str, fields: &[Param]) -> FyrResult<()> {
-        if self.structs.contains_key(name) || self.current_scope().contains_key(name) {
+        if self.structs.contains_key(name)
+            || self.enums.contains_key(name)
+            || self.current_scope().contains_key(name)
+        {
             return Err(runtime_error(format!("struct '{name}' already exists")));
         }
 
@@ -299,6 +344,27 @@ impl Evaluator {
         }
 
         self.structs.insert(name.to_owned(), fields.to_vec());
+        Ok(())
+    }
+
+    fn define_enum(&mut self, name: &str, variants: &[String]) -> FyrResult<()> {
+        if self.enums.contains_key(name)
+            || self.structs.contains_key(name)
+            || self.current_scope().contains_key(name)
+        {
+            return Err(runtime_error(format!("enum '{name}' already exists")));
+        }
+
+        let mut seen = HashMap::new();
+        for variant in variants {
+            if seen.insert(variant.clone(), ()).is_some() {
+                return Err(runtime_error(format!(
+                    "enum '{name}' has duplicate variant '{variant}'"
+                )));
+            }
+        }
+
+        self.enums.insert(name.to_owned(), variants.to_vec());
         Ok(())
     }
 
@@ -318,8 +384,10 @@ impl Evaluator {
     fn eval_expr_flow(&mut self, expr: &Expr) -> FyrResult<Flow> {
         match expr {
             Expr::Int(value) => Ok(Flow::Value(Value::Int(*value))),
+            Expr::Float(value) => Ok(Flow::Value(Value::Float(*value))),
             Expr::Bool(value) => Ok(Flow::Value(Value::Bool(*value))),
             Expr::Str(value) => Ok(Flow::Value(Value::Str(value.clone()))),
+            Expr::Nil => Ok(Flow::Value(Value::Nil)),
             Expr::Variable(name) => {
                 self.lookup(name).cloned().map(Flow::Value).ok_or_else(|| {
                     FyrError::new(format!("unknown binding '{name}'"), Span::new(0, 0))
@@ -343,6 +411,13 @@ impl Evaluator {
                 then_branch,
                 else_branch,
             } => self.eval_if(condition, then_branch, else_branch),
+            Expr::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+            } => self.eval_if_let(name, value, then_branch, else_branch),
+            Expr::Match { value, arms } => self.eval_match(value, arms),
         }
     }
 
@@ -485,6 +560,21 @@ impl Evaluator {
     }
 
     fn eval_field(&mut self, object: &Expr, field: &str) -> FyrResult<Flow> {
+        if let Expr::Variable(enum_name) = object
+            && let Some(variants) = self.enums.get(enum_name)
+        {
+            if variants.iter().any(|variant| variant == field) {
+                return Ok(Flow::Value(Value::Enum {
+                    name: enum_name.clone(),
+                    variant: field.to_owned(),
+                }));
+            }
+
+            return Err(runtime_error(format!(
+                "enum '{enum_name}' has no variant '{field}'"
+            )));
+        }
+
         match self.eval_expr_flow(object)? {
             Flow::Value(Value::Struct { name, fields }) => fields
                 .get(field)
@@ -502,13 +592,25 @@ impl Evaluator {
     fn eval_unary(&self, op: UnaryOp, value: Value) -> FyrResult<Value> {
         match (op, value) {
             (UnaryOp::Negate, Value::Int(value)) => checked_int("negation", value.checked_neg()),
+            (UnaryOp::Negate, Value::Float(value)) => checked_float("negation", -value),
             (UnaryOp::Not, Value::Bool(value)) => Ok(Value::Bool(!value)),
-            (UnaryOp::Negate, other) => type_error("integer", &other),
+            (UnaryOp::Negate, other) => type_error("i64 or f64", &other),
             (UnaryOp::Not, other) => type_error("bool", &other),
         }
     }
 
     fn eval_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> FyrResult<Flow> {
+        if op == BinaryOp::Coalesce {
+            let left = match self.eval_expr_flow(left)? {
+                Flow::Value(value) => value,
+                flow => return Ok(flow),
+            };
+            return match left {
+                Value::Nil => self.eval_expr_flow(right),
+                value => Ok(Flow::Value(value)),
+            };
+        }
+
         if op == BinaryOp::And {
             let left = match self.eval_expr_flow(left)? {
                 Flow::Value(value) => value,
@@ -564,6 +666,27 @@ impl Evaluator {
             (Value::Int(left), BinaryOp::Remainder, Value::Int(right)) => {
                 checked_int("remainder", left.checked_rem(right))?
             }
+            (Value::Float(left), BinaryOp::Add, Value::Float(right)) => {
+                checked_float("addition", left + right)?
+            }
+            (Value::Float(left), BinaryOp::Subtract, Value::Float(right)) => {
+                checked_float("subtraction", left - right)?
+            }
+            (Value::Float(left), BinaryOp::Multiply, Value::Float(right)) => {
+                checked_float("multiplication", left * right)?
+            }
+            (Value::Float(_), BinaryOp::Divide, Value::Float(0.0)) => {
+                return Err(runtime_error("division by zero"));
+            }
+            (Value::Float(left), BinaryOp::Divide, Value::Float(right)) => {
+                checked_float("division", left / right)?
+            }
+            (Value::Float(_), BinaryOp::Remainder, Value::Float(0.0)) => {
+                return Err(runtime_error("remainder by zero"));
+            }
+            (Value::Float(left), BinaryOp::Remainder, Value::Float(right)) => {
+                checked_float("remainder", left % right)?
+            }
             (Value::Str(left), BinaryOp::Add, Value::Str(right)) => {
                 Value::Str(format!("{left}{right}"))
             }
@@ -585,6 +708,16 @@ impl Evaluator {
             (Value::Int(left), BinaryOp::GreaterEqual, Value::Int(right)) => {
                 Value::Bool(left >= right)
             }
+            (Value::Float(left), BinaryOp::Less, Value::Float(right)) => Value::Bool(left < right),
+            (Value::Float(left), BinaryOp::LessEqual, Value::Float(right)) => {
+                Value::Bool(left <= right)
+            }
+            (Value::Float(left), BinaryOp::Greater, Value::Float(right)) => {
+                Value::Bool(left > right)
+            }
+            (Value::Float(left), BinaryOp::GreaterEqual, Value::Float(right)) => {
+                Value::Bool(left >= right)
+            }
             (left, op, right) => Err(runtime_error(format!(
                 "operator '{op:?}' cannot be applied to {left:?} and {right:?}"
             )))?,
@@ -603,6 +736,8 @@ impl Evaluator {
 
     fn eval_call(&mut self, callee: &str, args: &[Expr]) -> FyrResult<Flow> {
         match callee {
+            "i64" => self.eval_numeric_conversion(callee, args),
+            "f64" => self.eval_numeric_conversion(callee, args),
             "len" => {
                 if args.len() != 1 {
                     return Err(runtime_error("len expects exactly one argument"));
@@ -665,6 +800,49 @@ impl Evaluator {
                 Ok(Flow::Value(Value::Str(value.type_name().to_owned())))
             }
             other => self.eval_user_call(other, args),
+        }
+    }
+
+    fn eval_numeric_conversion(&mut self, name: &str, args: &[Expr]) -> FyrResult<Flow> {
+        if args.len() != 1 {
+            return Err(runtime_error(format!(
+                "{name} expects exactly one argument"
+            )));
+        }
+
+        let value = match self.eval_expr_flow(&args[0])? {
+            Flow::Value(value) => value,
+            flow => return Ok(flow),
+        };
+
+        match (name, value) {
+            ("i64", Value::Int(value)) => Ok(Flow::Value(Value::Int(value))),
+            ("i64", Value::Float(value)) => {
+                if !value.is_finite() {
+                    return Err(runtime_error("i64 conversion expected a finite f64 value"));
+                }
+                if value.fract() != 0.0 {
+                    return Err(runtime_error("i64 conversion expected a whole f64 value"));
+                }
+                if !(-EXACT_F64_INTEGER_LIMIT_F64..=EXACT_F64_INTEGER_LIMIT_F64).contains(&value) {
+                    return Err(runtime_error(
+                        "i64 conversion expected a value inside the exact f64 integer range",
+                    ));
+                }
+                Ok(Flow::Value(Value::Int(value as i64)))
+            }
+            ("f64", Value::Float(value)) => Ok(Flow::Value(Value::Float(value))),
+            ("f64", Value::Int(value)) => {
+                if !(-EXACT_F64_INTEGER_LIMIT..=EXACT_F64_INTEGER_LIMIT).contains(&value) {
+                    return Err(runtime_error("f64 conversion would lose integer precision"));
+                }
+                Ok(Flow::Value(Value::Float(value as f64)))
+            }
+            ("i64" | "f64", other) => Err(runtime_error(format!(
+                "{name} conversion expects i64 or f64, found {}",
+                format_value_type(&other)
+            ))),
+            _ => unreachable!("numeric conversion called with non-numeric builtin"),
         }
     }
 
@@ -1265,6 +1443,66 @@ impl Evaluator {
         }
     }
 
+    fn eval_if_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        then_branch: &[Statement],
+        else_branch: &[Statement],
+    ) -> FyrResult<Flow> {
+        let value = match self.eval_expr_flow(value)? {
+            Flow::Value(value) => value,
+            flow => return Ok(flow),
+        };
+
+        if value == Value::Nil {
+            return self.eval_block_scoped(else_branch);
+        }
+
+        self.push_scope();
+        let ty = infer_value_type(&value);
+        self.define(name, value, ty, false)?;
+        let result = self.eval_block(then_branch);
+        self.pop_scope();
+        result
+    }
+
+    fn eval_match(&mut self, value: &Expr, arms: &[MatchArm]) -> FyrResult<Flow> {
+        let value = match self.eval_expr_flow(value)? {
+            Flow::Value(value) => value,
+            flow => return Ok(flow),
+        };
+
+        let Value::Enum { name, variant } = value else {
+            return Err(runtime_error(format!(
+                "match expected an enum value, found {}",
+                value.type_name()
+            )));
+        };
+
+        let mut else_arm = None;
+        for arm in arms {
+            match &arm.pattern {
+                MatchPattern::Variant {
+                    enum_name,
+                    variant: arm_variant,
+                } if enum_name == &name && arm_variant == &variant => {
+                    return self.eval_block_scoped(&arm.body);
+                }
+                MatchPattern::Else => else_arm = Some(arm),
+                _ => {}
+            }
+        }
+
+        if let Some(arm) = else_arm {
+            return self.eval_block_scoped(&arm.body);
+        }
+
+        Err(runtime_error(format!(
+            "match missing arm for {name}.{variant}"
+        )))
+    }
+
     fn eval_while(&mut self, condition: &Expr, body: &[Statement]) -> FyrResult<Flow> {
         loop {
             match self.eval_expr_flow(condition)? {
@@ -1351,6 +1589,11 @@ impl Evaluator {
         mutable: bool,
     ) -> FyrResult<()> {
         let ty = if *annotation == TypeName::Infer {
+            if value == Value::Nil {
+                return Err(runtime_error(format!(
+                    "binding '{name}' needs an explicit nullable type for nil"
+                )));
+            }
             infer_value_type(&value)
         } else {
             if !value_matches_type(&value, annotation) {
@@ -1367,7 +1610,7 @@ impl Evaluator {
     }
 
     fn define(&mut self, name: &str, value: Value, ty: TypeName, mutable: bool) -> FyrResult<()> {
-        if self.structs.contains_key(name) {
+        if self.structs.contains_key(name) || self.enums.contains_key(name) {
             return Err(runtime_error(format!("binding '{name}' already exists")));
         }
 
@@ -1441,10 +1684,13 @@ impl Value {
     fn type_name(&self) -> &'static str {
         match self {
             Value::Int(_) => "i64",
+            Value::Float(_) => "f64",
             Value::Bool(_) => "bool",
             Value::Str(_) => "str",
+            Value::Nil => "nil",
             Value::Array(_) => "array",
             Value::Struct { .. } => "struct",
+            Value::Enum { .. } => "enum",
             Value::Function(_) => "fn",
             Value::Unit => "unit",
         }
@@ -1504,41 +1750,32 @@ fn reject_duplicate_members(
 fn infer_value_type(value: &Value) -> TypeName {
     match value {
         Value::Int(_) => TypeName::I64,
+        Value::Float(_) => TypeName::F64,
         Value::Bool(_) => TypeName::Bool,
         Value::Str(_) => TypeName::Str,
+        Value::Nil => TypeName::Infer,
         Value::Unit => TypeName::Unit,
         Value::Struct { name, .. } => TypeName::Struct(name.clone()),
+        Value::Enum { name, .. } => TypeName::Struct(name.clone()),
         Value::Array(values) => TypeName::Array(Box::new(infer_array_element_type(values))),
         Value::Function(_) => TypeName::Infer,
     }
 }
 
 fn infer_array_element_type(values: &[Value]) -> TypeName {
-    let Some(first) = values.first() else {
-        return TypeName::Infer;
-    };
-
-    let first_type = infer_value_type(first);
-    if values
-        .iter()
-        .skip(1)
-        .all(|value| value_matches_type(value, &first_type))
-    {
-        first_type
-    } else {
-        TypeName::Infer
-    }
+    array_element_type(values).unwrap_or(TypeName::Infer)
 }
 
 fn value_matches_type(value: &Value, ty: &TypeName) -> bool {
     match ty {
         TypeName::Infer => true,
         TypeName::I64 => matches!(value, Value::Int(_)),
+        TypeName::F64 => matches!(value, Value::Float(_)),
         TypeName::Bool => matches!(value, Value::Bool(_)),
         TypeName::Str => matches!(value, Value::Str(_)),
         TypeName::Unit => matches!(value, Value::Unit),
         TypeName::Struct(expected) => {
-            matches!(value, Value::Struct { name, .. } if name == expected)
+            matches!(value, Value::Struct { name, .. } | Value::Enum { name, .. } if name == expected)
         }
         TypeName::Array(element) => match value {
             Value::Array(values) => values
@@ -1546,6 +1783,9 @@ fn value_matches_type(value: &Value, ty: &TypeName) -> bool {
                 .all(|value| value_matches_type(value, element)),
             _ => false,
         },
+        TypeName::Nullable(inner) => {
+            matches!(value, Value::Nil) || value_matches_type(value, inner)
+        }
     }
 }
 
@@ -1553,11 +1793,13 @@ fn format_type_name(ty: &TypeName) -> String {
     match ty {
         TypeName::Infer => "infer".to_owned(),
         TypeName::I64 => "i64".to_owned(),
+        TypeName::F64 => "f64".to_owned(),
         TypeName::Bool => "bool".to_owned(),
         TypeName::Str => "str".to_owned(),
         TypeName::Unit => "unit".to_owned(),
         TypeName::Struct(name) => name.clone(),
         TypeName::Array(element) => format!("[{}]", format_type_name(element)),
+        TypeName::Nullable(inner) => format!("{}?", format_type_name(inner)),
     }
 }
 
@@ -1565,25 +1807,15 @@ fn format_value_type(value: &Value) -> String {
     match value {
         Value::Array(values) => format_array_type(values),
         Value::Struct { name, .. } => name.clone(),
+        Value::Enum { name, .. } => name.clone(),
         _ => value.type_name().to_owned(),
     }
 }
 
 fn format_array_type(values: &[Value]) -> String {
-    let Some(first) = values.first() else {
-        return "array".to_owned();
-    };
-
-    let first_type = format_value_type(first);
-    if values
-        .iter()
-        .skip(1)
-        .all(|value| format_value_type(value) == first_type)
-    {
-        format!("[{first_type}]")
-    } else {
-        "array".to_owned()
-    }
+    array_element_type(values)
+        .map(|ty| format!("[{}]", format_type_name(&ty)))
+        .unwrap_or_else(|| "array".to_owned())
 }
 
 fn ensure_homogeneous_array(values: &[Value], context: &str) -> FyrResult<()> {
@@ -1680,19 +1912,30 @@ fn expect_string_array(values: Vec<Value>, context: &str) -> FyrResult<Vec<Strin
 }
 
 fn array_element_type(values: &[Value]) -> Option<TypeName> {
-    values
+    let has_nil = values.iter().any(|value| matches!(value, Value::Nil));
+    let element = values
         .iter()
         .map(infer_value_type)
-        .find(|ty| !type_has_infer(ty))
+        .find(|ty| !type_has_infer(ty))?;
+
+    if has_nil {
+        Some(TypeName::Nullable(Box::new(element)))
+    } else {
+        Some(element)
+    }
 }
 
 fn type_has_infer(ty: &TypeName) -> bool {
     match ty {
         TypeName::Infer => true,
         TypeName::Array(element) => type_has_infer(element),
-        TypeName::I64 | TypeName::Bool | TypeName::Str | TypeName::Unit | TypeName::Struct(_) => {
-            false
-        }
+        TypeName::Nullable(inner) => type_has_infer(inner),
+        TypeName::I64
+        | TypeName::F64
+        | TypeName::Bool
+        | TypeName::Str
+        | TypeName::Unit
+        | TypeName::Struct(_) => false,
     }
 }
 
@@ -1700,6 +1943,24 @@ fn checked_int(operation: &str, value: Option<i64>) -> FyrResult<Value> {
     value
         .map(Value::Int)
         .ok_or_else(|| runtime_error(format!("integer overflow in {operation}")))
+}
+
+fn checked_float(operation: &str, value: f64) -> FyrResult<Value> {
+    if value.is_finite() {
+        Ok(Value::Float(value))
+    } else {
+        Err(runtime_error(format!(
+            "non-finite floating-point result in {operation}"
+        )))
+    }
+}
+
+fn format_float(value: f64) -> String {
+    let mut raw = value.to_string();
+    if !raw.contains('.') && !raw.contains('e') && !raw.contains('E') {
+        raw.push_str(".0");
+    }
+    raw
 }
 
 fn checked_slice_bounds(start: i64, end: i64, len: usize) -> FyrResult<(usize, usize)> {
@@ -1864,6 +2125,83 @@ let p: Point = Size { x: 3 }
     }
 
     #[test]
+    fn supports_nullable_values_at_runtime() {
+        let result = run(r#"
+let missing: i64? = nil
+let present: i64? = 7
+var current: i64? = missing
+current = 42
+let values: [i64?] = [nil, present, current]
+let fallback = missing ?? 11
+let chosen = present ?? 99
+assert(type(missing) == "nil")
+assert(missing == nil)
+assert(present != nil)
+assert(contains(values, nil))
+assert(find(values, 42) == 2)
+assert(fallback == 11)
+chosen + current
+"#)
+        .expect("nullable runtime program should run");
+
+        assert_eq!(result.last_value, Value::Int(49));
+    }
+
+    #[test]
+    fn coalesce_short_circuits_present_values() {
+        let result = run(r#"
+fn explode() -> i64:
+    return 1 / 0
+
+let present: i64? = 7
+let missing: i64? = nil
+let chosen = present ?? explode()
+let recovered = missing ?? 35
+chosen + recovered
+"#)
+        .expect("present coalesce should skip fallback");
+
+        assert_eq!(result.last_value, Value::Int(42));
+    }
+
+    #[test]
+    fn supports_if_let_nullable_unwrapping() {
+        let result = run(r#"
+fn maybe(flag: bool) -> i64?:
+    if flag:
+        return 41
+    else:
+        return nil
+
+let recovered = if let value = maybe(true):
+    value + 1
+else:
+    0
+
+var seen = 0
+if let missing = maybe(false):
+    seen = missing
+elif let fallback = maybe(true):
+    seen = fallback
+else:
+    seen = -1
+
+assert(recovered == 42)
+seen
+"#)
+        .expect("if let should unwrap present nullable values and skip nil values");
+
+        assert_eq!(result.last_value, Value::Int(41));
+    }
+
+    #[test]
+    fn rejects_untyped_runtime_nil_bindings() {
+        let error = run("let missing = nil\n").expect_err("untyped nil should fail at runtime");
+
+        assert!(error.message.contains("explicit nullable type"));
+    }
+
+    #[test]
     fn rejects_duplicate_runtime_functions() {
         let error = run(r#"
 fn answer() -> i64:
@@ -1885,10 +2223,74 @@ fn answer() -> i64:
     }
 
     #[test]
+    fn supports_f64_arithmetic_and_comparison() {
+        let result = run(r#"
+fn average(total: f64, count: f64) -> f64:
+    return total / count
+
+let radius: f64 = 2.5
+let area = 3.14 * radius * radius
+let shifted = -area + 20.0
+let maybe: f64? = nil
+let recovered = maybe ?? average(7.5, 3.0)
+assert(area > 19.6 and area < 19.7)
+assert(shifted > 0.3)
+assert(recovered == 2.5)
+recovered
+"#)
+        .expect("f64 arithmetic should run");
+
+        assert_eq!(result.last_value, Value::Float(2.5));
+    }
+
+    #[test]
+    fn supports_explicit_numeric_conversions() {
+        let result = run(r#"
+let count: i64 = 4
+let total: f64 = f64(count) + 2.5
+let whole: i64 = i64(total - 0.5)
+assert(type(total) == "f64")
+assert(type(whole) == "i64")
+whole
+"#)
+        .expect("numeric conversions should run");
+
+        assert_eq!(result.last_value, Value::Int(6));
+    }
+
+    #[test]
+    fn rejects_unsafe_numeric_conversions() {
+        let fractional =
+            run("i64(2.5)\n").expect_err("fractional f64 to i64 should fail at runtime");
+        assert!(
+            fractional
+                .message
+                .contains("i64 conversion expected a whole f64 value")
+        );
+
+        let precision = run("f64(9007199254740993)\n")
+            .expect_err("precision-losing i64 to f64 should fail at runtime");
+        assert!(
+            precision
+                .message
+                .contains("f64 conversion would lose integer precision")
+        );
+    }
+
+    #[test]
     fn rejects_division_by_zero() {
         let error = run("1 / 0\n").expect_err("division by zero should fail");
 
         assert!(error.message.contains("division by zero"));
+    }
+
+    #[test]
+    fn rejects_f64_division_and_remainder_by_zero() {
+        let division = run("1.0 / 0.0\n").expect_err("float division by zero should fail");
+        assert!(division.message.contains("division by zero"));
+
+        let remainder = run("1.0 % 0.0\n").expect_err("float remainder by zero should fail");
+        assert!(remainder.message.contains("remainder by zero"));
     }
 
     #[test]
@@ -2256,6 +2658,62 @@ p.x + p.y
         .expect("forward struct literal should run");
 
         assert_eq!(result.last_value, Value::Int(7));
+    }
+
+    #[test]
+    fn supports_enum_variants_and_equality() {
+        let result = run(r#"
+let status = Status.Ready
+
+enum Status:
+    Pending
+    Ready
+
+let history: [Status] = [Status.Pending, status]
+assert(status == Status.Ready)
+assert(status != Status.Pending)
+assert(contains(history, Status.Pending))
+print(status)
+status
+"#)
+        .expect("enum program should run");
+
+        assert_eq!(
+            result.last_value,
+            Value::Enum {
+                name: "Status".to_owned(),
+                variant: "Ready".to_owned()
+            }
+        );
+        assert_eq!(result.outputs, vec!["Status.Ready"]);
+    }
+
+    #[test]
+    fn supports_enum_match_expressions() {
+        let result = run(r#"
+enum Status:
+    Pending
+    Ready
+    Failed
+
+fn describe(status: Status) -> str:
+    return match status:
+        Status.Pending:
+            "pending"
+        Status.Ready:
+            "ready"
+        else:
+            "failed"
+
+let ready = describe(Status.Ready)
+let failed = describe(Status.Failed)
+assert(ready == "ready")
+assert(failed == "failed")
+ready
+"#)
+        .expect("enum match should run");
+
+        assert_eq!(result.last_value, Value::Str("ready".to_owned()));
     }
 
     #[test]

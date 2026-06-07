@@ -1,0 +1,30 @@
+fn score(ready: bool) -> i64?:
+    if ready:
+        return 42
+    else:
+        return nil
+let missing: i64? = nil
+let present: i64? = score(true)
+let values: [i64?] = [missing, present, 7]
+let fallback = missing ?? 99
+let chosen = present ?? 0
+let recovered = if let value = present:
+    value
+else:
+    0
+var seen = 0
+if let value = missing:
+    seen = value
+elif let value = present:
+    seen = value
+else:
+    seen = -1
+assert(missing == nil, "nullable bindings should hold nil")
+assert(present != nil, "nullable bindings should also hold values")
+assert(fallback == 99, "coalesce should use the fallback when a value is nil")
+assert(chosen == 42, "coalesce should keep present values")
+assert(recovered == 42, "if let expressions should unwrap present values")
+assert(seen == 42, "elif let should continue to the next nullable value")
+assert(contains(values, nil), "nullable arrays should search for nil")
+assert(find(values, 42) == 1, "nullable arrays should search for concrete values")
+print(type(missing))

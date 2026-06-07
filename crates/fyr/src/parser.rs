@@ -1,4 +1,6 @@
-use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
+use crate::ast::{
+    BinaryOp, Expr, MatchArm, MatchPattern, Param, Program, Statement, TypeName, UnaryOp,
+};
 use crate::diagnostic::{FyrError, FyrResult};
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
@@ -44,6 +46,10 @@ impl<'a> Parser<'a> {
 
         if self.match_kind(&TokenKind::Struct) {
             return self.struct_statement(self.previous().span);
+        }
+
+        if self.match_kind(&TokenKind::Enum) {
+            return self.enum_statement(self.previous().span);
         }
 
         if self.match_kind(&TokenKind::Import) {
@@ -212,6 +218,28 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn enum_statement(&mut self, span: Span) -> FyrResult<Statement> {
+        let name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected an enum name after 'enum'",
+                    self.previous().span,
+                ));
+            }
+        };
+
+        self.consume(&TokenKind::Colon, "expected ':' before enum variants")?;
+        let variants = self.enum_variants()?;
+
+        Ok(Statement::Enum {
+            name,
+            variants,
+            span,
+            source_path: None,
+        })
+    }
+
     fn import_statement(&mut self, span: Span) -> FyrResult<Statement> {
         let path = match &self.advance().kind {
             TokenKind::Str(path) => path.clone(),
@@ -270,8 +298,43 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
+    fn enum_variants(&mut self) -> FyrResult<Vec<String>> {
+        self.consume(
+            &TokenKind::Newline,
+            "expected a newline before enum variants",
+        )?;
+        self.consume(&TokenKind::Indent, "expected indented enum variants")?;
+        self.skip_newlines();
+
+        let mut variants = Vec::new();
+        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+            let variant = match &self.advance().kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(FyrError::new(
+                        "expected a variant name in enum",
+                        self.previous().span,
+                    ));
+                }
+            };
+
+            variants.push(variant);
+            self.consume_statement_separator()?;
+        }
+
+        if variants.is_empty() {
+            return Err(FyrError::new(
+                "expected at least one variant in enum",
+                self.peek().span,
+            ));
+        }
+
+        self.consume(&TokenKind::Dedent, "expected enum variants to dedent")?;
+        Ok(variants)
+    }
+
     fn while_statement(&mut self, span: Span) -> FyrResult<Statement> {
-        let condition = self.or()?;
+        let condition = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after while condition")?;
         let body = self.block("while body")?;
 
@@ -309,7 +372,22 @@ impl<'a> Parser<'a> {
     }
 
     fn if_statement(&mut self, span: Span) -> FyrResult<Statement> {
-        let condition = self.or()?;
+        if self.match_kind(&TokenKind::Let) {
+            let (name, value) = self.if_let_header()?;
+            let then_branch = self.block("if let body")?;
+            let else_branch = self.if_statement_tail()?;
+
+            return Ok(Statement::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+                span,
+                source_path: None,
+            });
+        }
+
+        let condition = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after if condition")?;
         let then_branch = self.block("if body")?;
         let else_branch = self.if_statement_tail()?;
@@ -380,6 +458,16 @@ impl<'a> Parser<'a> {
     }
 
     fn type_name(&mut self) -> FyrResult<TypeName> {
+        let mut ty = self.primary_type_name()?;
+
+        while self.match_kind(&TokenKind::Question) {
+            ty = TypeName::Nullable(Box::new(ty));
+        }
+
+        Ok(ty)
+    }
+
+    fn primary_type_name(&mut self) -> FyrResult<TypeName> {
         let token = self.advance();
 
         match &token.kind {
@@ -389,6 +477,7 @@ impl<'a> Parser<'a> {
                 Ok(TypeName::Array(Box::new(element)))
             }
             TokenKind::Identifier(name) if name == "i64" => Ok(TypeName::I64),
+            TokenKind::Identifier(name) if name == "f64" => Ok(TypeName::F64),
             TokenKind::Identifier(name) if name == "bool" => Ok(TypeName::Bool),
             TokenKind::Identifier(name) if name == "str" => Ok(TypeName::Str),
             TokenKind::Identifier(name) if name == "unit" => Ok(TypeName::Unit),
@@ -402,11 +491,28 @@ impl<'a> Parser<'a> {
             return self.if_expression();
         }
 
-        self.or()
+        if self.match_kind(&TokenKind::Match) {
+            return self.match_expression();
+        }
+
+        self.coalesce()
     }
 
     fn if_expression(&mut self) -> FyrResult<Expr> {
-        let condition = self.or()?;
+        if self.match_kind(&TokenKind::Let) {
+            let (name, value) = self.if_let_header()?;
+            let then_branch = self.block("if let body")?;
+            let else_branch = self.if_expression_tail()?;
+
+            return Ok(Expr::IfLet {
+                name,
+                value: Box::new(value),
+                then_branch,
+                else_branch,
+            });
+        }
+
+        let condition = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after if condition")?;
         let then_branch = self.block("if body")?;
         let else_branch = self.if_expression_tail()?;
@@ -446,7 +552,26 @@ impl<'a> Parser<'a> {
     }
 
     fn elif_tail(&mut self, require_else: bool, span: Span) -> FyrResult<Vec<Statement>> {
-        let condition = self.or()?;
+        if self.match_kind(&TokenKind::Let) {
+            let (name, value) = self.if_let_header()?;
+            let then_branch = self.block("elif let body")?;
+            let else_branch = if require_else {
+                self.if_expression_tail()?
+            } else {
+                self.if_statement_tail()?
+            };
+
+            return Ok(vec![Statement::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+                span,
+                source_path: None,
+            }]);
+        }
+
+        let condition = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after elif condition")?;
         let then_branch = self.block("elif body")?;
         let else_branch = if require_else {
@@ -462,6 +587,112 @@ impl<'a> Parser<'a> {
             span,
             source_path: None,
         }])
+    }
+
+    fn match_expression(&mut self) -> FyrResult<Expr> {
+        let value = self.coalesce()?;
+        self.consume(&TokenKind::Colon, "expected ':' after match value")?;
+        let arms = self.match_arms()?;
+
+        Ok(Expr::Match {
+            value: Box::new(value),
+            arms,
+        })
+    }
+
+    fn match_arms(&mut self) -> FyrResult<Vec<MatchArm>> {
+        self.consume(&TokenKind::Newline, "expected a newline before match arms")?;
+        self.consume(&TokenKind::Indent, "expected indented match arms")?;
+        self.skip_newlines();
+
+        let mut arms = Vec::new();
+        let mut saw_else = false;
+        while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
+            if saw_else {
+                return Err(FyrError::new(
+                    "match else arm must be last",
+                    self.peek().span,
+                ));
+            }
+
+            let pattern = self.match_pattern()?;
+            saw_else = matches!(pattern, MatchPattern::Else);
+            self.consume(&TokenKind::Colon, "expected ':' after match arm pattern")?;
+            let body = self.block("match arm")?;
+            arms.push(MatchArm { pattern, body });
+            self.skip_newlines();
+        }
+
+        if arms.is_empty() {
+            return Err(FyrError::new(
+                "expected at least one arm in match",
+                self.peek().span,
+            ));
+        }
+
+        self.consume(&TokenKind::Dedent, "expected match arms to dedent")?;
+        Ok(arms)
+    }
+
+    fn match_pattern(&mut self) -> FyrResult<MatchPattern> {
+        if self.match_kind(&TokenKind::Else) {
+            return Ok(MatchPattern::Else);
+        }
+
+        let enum_name = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected an enum variant or else in match arm",
+                    self.previous().span,
+                ));
+            }
+        };
+        self.consume(&TokenKind::Dot, "expected '.' in enum match arm")?;
+        let variant = match &self.advance().kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected a variant name in match arm",
+                    self.previous().span,
+                ));
+            }
+        };
+
+        Ok(MatchPattern::Variant { enum_name, variant })
+    }
+
+    fn if_let_header(&mut self) -> FyrResult<(String, Expr)> {
+        let token = self.advance();
+        let name = match &token.kind {
+            TokenKind::Identifier(name) => name.clone(),
+            _ => {
+                return Err(FyrError::new(
+                    "expected a binding name after let",
+                    token.span,
+                ));
+            }
+        };
+
+        self.consume(&TokenKind::Equal, "expected '=' after if let binding")?;
+        let value = self.coalesce()?;
+        self.consume(&TokenKind::Colon, "expected ':' after if let value")?;
+        Ok((name, value))
+    }
+
+    fn coalesce(&mut self) -> FyrResult<Expr> {
+        let expr = self.or()?;
+
+        if self.match_kind(&TokenKind::QuestionQuestion) {
+            let right = self.coalesce()?;
+            return Ok(Expr::Binary {
+                left: Box::new(expr),
+                op: BinaryOp::Coalesce,
+                right: Box::new(right),
+            });
+        }
+
+        Ok(expr)
     }
 
     fn or(&mut self) -> FyrResult<Expr> {
@@ -698,9 +929,11 @@ impl<'a> Parser<'a> {
 
         match &token.kind {
             TokenKind::Int(value) => Ok(Expr::Int(*value)),
+            TokenKind::Float(value) => Ok(Expr::Float(*value)),
             TokenKind::Str(value) => Ok(Expr::Str(value.clone())),
             TokenKind::True => Ok(Expr::Bool(true)),
             TokenKind::False => Ok(Expr::Bool(false)),
+            TokenKind::Nil => Ok(Expr::Nil),
             TokenKind::Identifier(name) => Ok(Expr::Variable(name.clone())),
             TokenKind::LBracket => self.array_literal(),
             TokenKind::LParen => {
@@ -1073,6 +1306,164 @@ var values: [i64] = []
             program.statements[1],
             Statement::Var {
                 ty: TypeName::Array(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_enum_declarations_and_variants() {
+        let tokens = lex(r#"
+enum Status:
+    Pending
+    Ready
+
+let status: Status = Status.Ready
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Enum {
+                ref name,
+                ref variants,
+                ..
+            } if name == "Status" && variants == &vec!["Pending".to_owned(), "Ready".to_owned()]
+        ));
+        assert!(matches!(
+            program.statements[1],
+            Statement::Let {
+                ty: TypeName::Struct(ref name),
+                value: Expr::Field { .. },
+                ..
+            } if name == "Status"
+        ));
+    }
+
+    #[test]
+    fn parses_match_expressions() {
+        let tokens = lex(r#"
+let label = match status:
+    Status.Pending:
+        "pending"
+    Status.Ready:
+        "ready"
+    else:
+        "other"
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Let {
+                value: Expr::Match { ref arms, .. },
+                ..
+            } if arms.len() == 3
+                && matches!(
+                    arms[0].pattern,
+                    MatchPattern::Variant { ref enum_name, ref variant }
+                    if enum_name == "Status" && variant == "Pending"
+                )
+                && matches!(arms[2].pattern, MatchPattern::Else)
+        ));
+    }
+
+    #[test]
+    fn parses_nil_and_nullable_types() {
+        let tokens = lex(r#"
+let maybe: i64? = nil
+let rows: [str?]? = nil
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Let {
+                ty: TypeName::Nullable(_),
+                value: Expr::Nil,
+                ..
+            }
+        ));
+        assert!(matches!(
+            program.statements[1],
+            Statement::Let {
+                ty: TypeName::Nullable(_),
+                value: Expr::Nil,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parses_if_let_statements_and_expressions() {
+        let tokens = lex(r#"
+let maybe: i64? = 42
+if let value = maybe:
+    print(value)
+else:
+    print(0)
+
+let recovered = if let value = maybe:
+    value
+else:
+    0
+"#)
+        .expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[1],
+            Statement::IfLet {
+                ref name,
+                value: Expr::Variable(_),
+                ..
+            } if name == "value"
+        ));
+        assert!(matches!(
+            program.statements[2],
+            Statement::Let {
+                value: Expr::IfLet { ref name, .. },
+                ..
+            } if name == "value"
+        ));
+    }
+
+    #[test]
+    fn parses_float_literals_and_annotations() {
+        let tokens = lex("let ratio: f64 = 2.75\n").expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        assert!(matches!(
+            program.statements[0],
+            Statement::Let {
+                ty: TypeName::F64,
+                value: Expr::Float(value),
+                ..
+            } if value == 2.75
+        ));
+    }
+
+    #[test]
+    fn parses_coalesce_operator_right_associative() {
+        let tokens = lex("let value = first ?? second ?? 0\n").expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        let Statement::Let {
+            value: Expr::Binary { op, right, .. },
+            ..
+        } = &program.statements[0]
+        else {
+            panic!("expected coalesce binding");
+        };
+
+        assert_eq!(*op, BinaryOp::Coalesce);
+        assert!(matches!(
+            right.as_ref(),
+            Expr::Binary {
+                op: BinaryOp::Coalesce,
                 ..
             }
         ));

@@ -15,9 +15,11 @@ pub enum TokenKind {
     Dedent,
     Identifier(String),
     Int(i64),
+    Float(f64),
     Str(String),
     True,
     False,
+    Nil,
     Let,
     Var,
     Fn,
@@ -25,6 +27,7 @@ pub enum TokenKind {
     In,
     Import,
     If,
+    Match,
     Elif,
     Else,
     While,
@@ -32,6 +35,7 @@ pub enum TokenKind {
     Break,
     Continue,
     Struct,
+    Enum,
     Arrow,
     Plus,
     Minus,
@@ -47,6 +51,8 @@ pub enum TokenKind {
     Comma,
     Colon,
     Dot,
+    QuestionQuestion,
+    Question,
     Equal,
     EqualEqual,
     Bang,
@@ -121,6 +127,8 @@ impl Lexer {
                 ',' => self.simple(TokenKind::Comma, span),
                 ':' => self.simple(TokenKind::Colon, span),
                 '.' => self.simple(TokenKind::Dot, span),
+                '?' if self.match_char('?') => self.simple(TokenKind::QuestionQuestion, span),
+                '?' => self.simple(TokenKind::Question, span),
                 '=' if self.match_char('=') => self.simple(TokenKind::EqualEqual, span),
                 '=' => self.simple(TokenKind::Equal, span),
                 '!' if self.match_char('=') => self.simple(TokenKind::BangEqual, span),
@@ -183,6 +191,10 @@ impl Lexer {
 
     fn peek(&self) -> Option<char> {
         self.chars.get(self.current).copied()
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        self.chars.get(self.current + 1).copied()
     }
 
     fn match_char(&mut self, expected: char) -> bool {
@@ -344,6 +356,32 @@ impl Lexer {
             raw.push(ch);
         }
 
+        if self.peek() == Some('.') && self.peek_next().is_some_and(|ch| ch.is_ascii_digit()) {
+            self.advance();
+            raw.push('.');
+
+            while let Some(ch) = self.peek() {
+                if !ch.is_ascii_digit() {
+                    break;
+                }
+                self.advance();
+                raw.push(ch);
+            }
+
+            let value = raw
+                .parse::<f64>()
+                .map_err(|_| FyrError::new("float literal is invalid", start))?;
+            if !value.is_finite() {
+                return Err(FyrError::new("float literal must be finite", start));
+            }
+
+            self.tokens.push(Token {
+                kind: TokenKind::Float(value),
+                span: start,
+            });
+            return Ok(());
+        }
+
         let value = raw
             .parse::<i64>()
             .map_err(|_| FyrError::new("integer literal is too large", start))?;
@@ -370,6 +408,7 @@ impl Lexer {
             "and" => TokenKind::AndAnd,
             "elif" => TokenKind::Elif,
             "else" => TokenKind::Else,
+            "enum" => TokenKind::Enum,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
             "false" => TokenKind::False,
@@ -379,6 +418,8 @@ impl Lexer {
             "import" => TokenKind::Import,
             "in" => TokenKind::In,
             "let" => TokenKind::Let,
+            "match" => TokenKind::Match,
+            "nil" => TokenKind::Nil,
             "not" => TokenKind::Bang,
             "or" => TokenKind::OrOr,
             "return" => TokenKind::Return,
@@ -473,6 +514,25 @@ mod tests {
     }
 
     #[test]
+    fn lexes_enum_keyword() {
+        let tokens = lex("enum Status:\n    Ready\n").expect("lexing should pass");
+        let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
+
+        assert!(matches!(kinds[0], TokenKind::Enum));
+        assert!(matches!(kinds[1], TokenKind::Identifier(ref name) if name == "Status"));
+        assert!(matches!(kinds[5], TokenKind::Identifier(ref name) if name == "Ready"));
+    }
+
+    #[test]
+    fn lexes_match_keyword() {
+        let tokens = lex("match status:\n    else:\n        0\n").expect("lexing should pass");
+        let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
+
+        assert!(matches!(kinds[0], TokenKind::Match));
+        assert!(matches!(kinds[5], TokenKind::Else));
+    }
+
+    #[test]
     fn lexes_word_boolean_operators() {
         let tokens = lex("let ready = not false and true or false\n").expect("lexing should pass");
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
@@ -493,6 +553,40 @@ mod tests {
                 TokenKind::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn lexes_nil_nullable_marker_and_coalesce_operator() {
+        let tokens = lex("let value: i64? = maybe ?? nil\n").expect("lexing should pass");
+        let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
+
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Let,
+                TokenKind::Identifier("value".to_owned()),
+                TokenKind::Colon,
+                TokenKind::Identifier("i64".to_owned()),
+                TokenKind::Question,
+                TokenKind::Equal,
+                TokenKind::Identifier("maybe".to_owned()),
+                TokenKind::QuestionQuestion,
+                TokenKind::Nil,
+                TokenKind::Newline,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn lexes_float_literals_without_breaking_field_dots() {
+        let tokens = lex("let ratio = 2.75\nvalue.field\n").expect("lexing should pass");
+        let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
+
+        assert!(matches!(kinds[3], TokenKind::Float(value) if value == 2.75));
+        assert!(matches!(kinds[5], TokenKind::Identifier(ref name) if name == "value"));
+        assert!(matches!(kinds[6], TokenKind::Dot));
+        assert!(matches!(kinds[7], TokenKind::Identifier(ref name) if name == "field"));
     }
 
     #[test]

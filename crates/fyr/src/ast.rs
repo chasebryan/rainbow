@@ -40,6 +40,12 @@ pub enum Statement {
         span: Span,
         source_path: Option<PathBuf>,
     },
+    Enum {
+        name: String,
+        variants: Vec<String>,
+        span: Span,
+        source_path: Option<PathBuf>,
+    },
     Fn {
         name: String,
         params: Vec<Param>,
@@ -63,6 +69,14 @@ pub enum Statement {
     },
     If {
         condition: Expr,
+        then_branch: Vec<Statement>,
+        else_branch: Vec<Statement>,
+        span: Span,
+        source_path: Option<PathBuf>,
+    },
+    IfLet {
+        name: String,
+        value: Expr,
         then_branch: Vec<Statement>,
         else_branch: Vec<Statement>,
         span: Span,
@@ -96,10 +110,12 @@ impl Statement {
             | Statement::Assign { span, .. }
             | Statement::Import { span, .. }
             | Statement::Struct { span, .. }
+            | Statement::Enum { span, .. }
             | Statement::Fn { span, .. }
             | Statement::While { span, .. }
             | Statement::For { span, .. }
             | Statement::If { span, .. }
+            | Statement::IfLet { span, .. }
             | Statement::Return { span, .. }
             | Statement::Break { span, .. }
             | Statement::Continue { span, .. }
@@ -114,10 +130,12 @@ impl Statement {
             | Statement::Assign { source_path, .. }
             | Statement::Import { source_path, .. }
             | Statement::Struct { source_path, .. }
+            | Statement::Enum { source_path, .. }
             | Statement::Fn { source_path, .. }
             | Statement::While { source_path, .. }
             | Statement::For { source_path, .. }
             | Statement::If { source_path, .. }
+            | Statement::IfLet { source_path, .. }
             | Statement::Return { source_path, .. }
             | Statement::Break { source_path, .. }
             | Statement::Continue { source_path, .. }
@@ -129,18 +147,18 @@ impl Statement {
         let origin = Some(path.to_path_buf());
         match self {
             Statement::Let {
-                source_path: target,
-                ..
+                value, source_path, ..
             }
             | Statement::Var {
-                source_path: target,
-                ..
+                value, source_path, ..
             }
             | Statement::Assign {
-                source_path: target,
-                ..
+                value, source_path, ..
+            } => {
+                *source_path = origin;
+                value.set_source_path_recursive(path);
             }
-            | Statement::Import {
+            Statement::Import {
                 source_path: target,
                 ..
             }
@@ -148,7 +166,7 @@ impl Statement {
                 source_path: target,
                 ..
             }
-            | Statement::Return {
+            | Statement::Enum {
                 source_path: target,
                 ..
             }
@@ -159,20 +177,24 @@ impl Statement {
             | Statement::Continue {
                 source_path: target,
                 ..
-            }
-            | Statement::Expr {
-                source_path: target,
-                ..
             } => {
                 *target = origin;
             }
+            Statement::Return {
+                value, source_path, ..
+            } => {
+                *source_path = origin;
+                if let Some(value) = value {
+                    value.set_source_path_recursive(path);
+                }
+            }
+            Statement::Expr {
+                expr, source_path, ..
+            } => {
+                *source_path = origin;
+                expr.set_source_path_recursive(path);
+            }
             Statement::Fn {
-                body, source_path, ..
-            }
-            | Statement::While {
-                body, source_path, ..
-            }
-            | Statement::For {
                 body, source_path, ..
             } => {
                 *source_path = origin;
@@ -180,13 +202,55 @@ impl Statement {
                     statement.set_source_path_recursive(path);
                 }
             }
+            Statement::While {
+                condition,
+                body,
+                source_path,
+                ..
+            } => {
+                *source_path = origin;
+                condition.set_source_path_recursive(path);
+                for statement in body {
+                    statement.set_source_path_recursive(path);
+                }
+            }
+            Statement::For {
+                iterable,
+                body,
+                source_path,
+                ..
+            } => {
+                *source_path = origin;
+                iterable.set_source_path_recursive(path);
+                for statement in body {
+                    statement.set_source_path_recursive(path);
+                }
+            }
             Statement::If {
+                condition,
                 then_branch,
                 else_branch,
                 source_path,
                 ..
             } => {
                 *source_path = origin;
+                condition.set_source_path_recursive(path);
+                for statement in then_branch {
+                    statement.set_source_path_recursive(path);
+                }
+                for statement in else_branch {
+                    statement.set_source_path_recursive(path);
+                }
+            }
+            Statement::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                source_path,
+                ..
+            } => {
+                *source_path = origin;
+                value.set_source_path_recursive(path);
                 for statement in then_branch {
                     statement.set_source_path_recursive(path);
                 }
@@ -204,6 +268,18 @@ pub struct Param {
     pub ty: TypeName,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: MatchPattern,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MatchPattern {
+    Variant { enum_name: String, variant: String },
+    Else,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeName {
     Infer,
@@ -211,15 +287,19 @@ pub enum TypeName {
     Bool,
     Str,
     Unit,
+    F64,
     Struct(String),
     Array(Box<TypeName>),
+    Nullable(Box<TypeName>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
+    Float(f64),
     Bool(bool),
     Str(String),
+    Nil,
     Variable(String),
     Unary {
         op: UnaryOp,
@@ -252,6 +332,89 @@ pub enum Expr {
         then_branch: Vec<Statement>,
         else_branch: Vec<Statement>,
     },
+    IfLet {
+        name: String,
+        value: Box<Expr>,
+        then_branch: Vec<Statement>,
+        else_branch: Vec<Statement>,
+    },
+    Match {
+        value: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
+}
+
+impl Expr {
+    fn set_source_path_recursive(&mut self, path: &Path) {
+        match self {
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::Bool(_)
+            | Expr::Str(_)
+            | Expr::Nil
+            | Expr::Variable(_) => {}
+            Expr::Unary { expr, .. } => expr.set_source_path_recursive(path),
+            Expr::Binary { left, right, .. } => {
+                left.set_source_path_recursive(path);
+                right.set_source_path_recursive(path);
+            }
+            Expr::Call { args, .. } => {
+                for arg in args {
+                    arg.set_source_path_recursive(path);
+                }
+            }
+            Expr::StructInit { fields, .. } => {
+                for (_, value) in fields {
+                    value.set_source_path_recursive(path);
+                }
+            }
+            Expr::Field { object, .. } => object.set_source_path_recursive(path),
+            Expr::Array(elements) => {
+                for element in elements {
+                    element.set_source_path_recursive(path);
+                }
+            }
+            Expr::Index { collection, index } => {
+                collection.set_source_path_recursive(path);
+                index.set_source_path_recursive(path);
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                condition.set_source_path_recursive(path);
+                for statement in then_branch {
+                    statement.set_source_path_recursive(path);
+                }
+                for statement in else_branch {
+                    statement.set_source_path_recursive(path);
+                }
+            }
+            Expr::IfLet {
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                value.set_source_path_recursive(path);
+                for statement in then_branch {
+                    statement.set_source_path_recursive(path);
+                }
+                for statement in else_branch {
+                    statement.set_source_path_recursive(path);
+                }
+            }
+            Expr::Match { value, arms } => {
+                value.set_source_path_recursive(path);
+                for arm in arms {
+                    for statement in &mut arm.body {
+                        statement.set_source_path_recursive(path);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +436,7 @@ pub enum BinaryOp {
     LessEqual,
     Greater,
     GreaterEqual,
+    Coalesce,
     And,
     Or,
 }

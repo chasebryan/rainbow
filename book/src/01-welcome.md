@@ -55,7 +55,7 @@ import "lib.fyr"
 print(greeting("Fyr"))
 ```
 
-Imports use relative `.fyr` paths. The command resolves imports before typechecking and running, catches import cycles, reports syntax failures with the source file path, and keeps imported statement locations for type and runtime diagnostics. File-backed diagnostics also show nearby source lines with a caret underline. It only includes the same imported file once for each root file. Inside a project, imports stay inside the nearest `fyr.toml` project root.
+Imports use relative `.fyr` paths. The command resolves imports before typechecking and running, catches import cycles, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, and keeps imported statement locations for type and runtime diagnostics. File-backed diagnostics also show nearby source lines with a caret underline. It only includes the same imported file once for each root file. Inside a project, imports stay inside the nearest `fyr.toml` project root.
 
 `fyr build` writes a checked, import-flattened Fyr source bundle:
 
@@ -101,7 +101,38 @@ while i <= 10:
 print(total)
 ```
 
-Integer arithmetic is checked. Overflow, division by zero, and remainder by zero stop the program instead of wrapping.
+Integer arithmetic is checked. Overflow, division by zero, and remainder by zero stop the program instead of wrapping. Decimal values use `f64`:
+
+```fyr
+let radius: f64 = 2.5
+let area = 3.14 * radius * radius
+let samples: i64 = 3
+let adjusted = f64(samples) + area
+print(area)
+```
+
+Fyr keeps `i64` and `f64` separate for now; write the type you want instead of relying on implicit numeric widening. Use `f64(count)` to convert an integer to a decimal value, and `i64(score)` to recover a whole decimal value. Those conversions are checked so fractional values and precision-losing integers fail instead of silently changing shape.
+
+Use `nil` when a value can be absent, and mark that type with `?`:
+
+```fyr
+fn score(ready: bool) -> i64?:
+    if ready:
+        return 42
+    else:
+        return nil
+
+let missing: i64? = nil
+let values: [i64?] = [missing, score(true)]
+let safe_score: i64 = missing ?? 0
+
+if let value = score(true):
+    print(value)
+else:
+    print(0)
+```
+
+Plain `i64` values can flow into `i64?`, but `i64?` cannot flow directly back into `i64`. Use `value ?? fallback` to recover a concrete value safely; Fyr only evaluates the fallback when the value is `nil`. Use `if let value = maybe:` when you want a scoped name for the present value; that name only exists inside the success branch.
 
 Functions can return early:
 
@@ -138,6 +169,27 @@ struct Point:
 
 let p = Point { x: 3, y: 4 }
 print(p.x + p.y)
+```
+
+Enums name a closed set of states:
+
+```fyr
+enum Status:
+    Pending
+    Ready
+    Failed
+
+let status: Status = Status.Ready
+
+let label = match status:
+    Status.Pending:
+        "pending"
+    Status.Ready:
+        "ready"
+    Status.Failed:
+        "failed"
+
+print(label)
 ```
 
 Arrays collect values of one type:

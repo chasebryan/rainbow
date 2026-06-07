@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Param, Program, Statement, TypeName, UnaryOp};
+use crate::ast::{BinaryOp, Expr, MatchPattern, Param, Program, Statement, TypeName, UnaryOp};
 use crate::diagnostic::FyrResult;
 use crate::lexer;
 use crate::parser;
@@ -83,6 +83,18 @@ impl Formatter {
                     self.output.push_str(&type_name(&field.ty));
                 }
             }
+            Statement::Enum { name, variants, .. } => {
+                self.output.push_str("enum ");
+                self.output.push_str(name);
+                self.output.push_str(":\n");
+                for (index, variant) in variants.iter().enumerate() {
+                    if index > 0 {
+                        self.output.push('\n');
+                    }
+                    self.write_indent(indent + 1);
+                    self.output.push_str(variant);
+                }
+            }
             Statement::Fn {
                 name,
                 params,
@@ -131,6 +143,15 @@ impl Formatter {
             } => {
                 self.if_statement(condition, then_branch, else_branch, indent, "if");
             }
+            Statement::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.if_let_statement(name, value, then_branch, else_branch, indent, "if");
+            }
             Statement::Return { value, .. } => {
                 self.output.push_str("return");
                 if let Some(value) = value {
@@ -160,6 +181,25 @@ impl Formatter {
         self.if_tail(else_branch, indent);
     }
 
+    fn if_let_statement(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        then_branch: &[Statement],
+        else_branch: &[Statement],
+        indent: usize,
+        keyword: &str,
+    ) {
+        self.output.push_str(keyword);
+        self.output.push_str(" let ");
+        self.output.push_str(name);
+        self.output.push_str(" = ");
+        self.expr(value, 0, indent);
+        self.output.push_str(":\n");
+        self.statements(then_branch, indent + 1);
+        self.if_tail(else_branch, indent);
+    }
+
     fn if_tail(&mut self, else_branch: &[Statement], indent: usize) {
         match else_branch {
             [] => {}
@@ -174,6 +214,19 @@ impl Formatter {
                 self.output.push('\n');
                 self.write_indent(indent);
                 self.if_statement(condition, then_branch, else_branch, indent, "elif");
+            }
+            [
+                Statement::IfLet {
+                    name,
+                    value,
+                    then_branch,
+                    else_branch,
+                    ..
+                },
+            ] => {
+                self.output.push('\n');
+                self.write_indent(indent);
+                self.if_let_statement(name, value, then_branch, else_branch, indent, "elif");
             }
             statements => {
                 self.output.push('\n');
@@ -217,7 +270,46 @@ impl Formatter {
                 self.statements(then_branch, indent + 1);
                 self.if_tail(else_branch, indent);
             }
+            Expr::IfLet {
+                name,
+                value,
+                then_branch,
+                else_branch,
+            } => {
+                self.output.push_str("if let ");
+                self.output.push_str(name);
+                self.output.push_str(" = ");
+                self.expr(value, 0, indent);
+                self.output.push_str(":\n");
+                self.statements(then_branch, indent + 1);
+                self.if_tail(else_branch, indent);
+            }
+            Expr::Match { value, arms } => {
+                self.output.push_str("match ");
+                self.expr(value, 0, indent);
+                self.output.push_str(":\n");
+                for (index, arm) in arms.iter().enumerate() {
+                    if index > 0 {
+                        self.output.push('\n');
+                    }
+                    self.write_indent(indent + 1);
+                    self.match_pattern(&arm.pattern);
+                    self.output.push_str(":\n");
+                    self.statements(&arm.body, indent + 2);
+                }
+            }
             _ => self.expr_inline(expr, parent_precedence),
+        }
+    }
+
+    fn match_pattern(&mut self, pattern: &MatchPattern) {
+        match pattern {
+            MatchPattern::Variant { enum_name, variant } => {
+                self.output.push_str(enum_name);
+                self.output.push('.');
+                self.output.push_str(variant);
+            }
+            MatchPattern::Else => self.output.push_str("else"),
         }
     }
 
@@ -230,8 +322,10 @@ impl Formatter {
 
         match expr {
             Expr::Int(value) => self.output.push_str(&value.to_string()),
+            Expr::Float(value) => self.output.push_str(&format_float(*value)),
             Expr::Bool(value) => self.output.push_str(if *value { "true" } else { "false" }),
             Expr::Str(value) => self.string(value),
+            Expr::Nil => self.output.push_str("nil"),
             Expr::Variable(name) => self.output.push_str(name),
             Expr::Unary { op, expr } => {
                 self.output.push_str(match op {
@@ -299,7 +393,9 @@ impl Formatter {
                 self.expr(index, 0, 0);
                 self.output.push(']');
             }
-            Expr::If { .. } => unreachable!("if expressions are handled by expr"),
+            Expr::If { .. } | Expr::IfLet { .. } | Expr::Match { .. } => {
+                unreachable!("if expressions are handled by expr")
+            }
         }
 
         if needs_parens {
@@ -333,32 +429,41 @@ fn type_name(ty: &TypeName) -> String {
     match ty {
         TypeName::Infer => "infer".to_owned(),
         TypeName::I64 => "i64".to_owned(),
+        TypeName::F64 => "f64".to_owned(),
         TypeName::Bool => "bool".to_owned(),
         TypeName::Str => "str".to_owned(),
         TypeName::Unit => "unit".to_owned(),
         TypeName::Struct(name) => name.clone(),
         TypeName::Array(element) => format!("[{}]", type_name(element)),
+        TypeName::Nullable(inner) => format!("{}?", type_name(inner)),
     }
 }
 
 fn expr_precedence(expr: &Expr) -> u8 {
     match expr {
-        Expr::If { .. } => 0,
+        Expr::If { .. } | Expr::IfLet { .. } | Expr::Match { .. } => 0,
         Expr::Binary { op, .. } => binary_precedence(*op),
         Expr::Unary { .. } => 7,
         Expr::Call { .. } | Expr::StructInit { .. } | Expr::Field { .. } | Expr::Index { .. } => 8,
-        Expr::Int(_) | Expr::Bool(_) | Expr::Str(_) | Expr::Variable(_) | Expr::Array(_) => 9,
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Bool(_)
+        | Expr::Str(_)
+        | Expr::Nil
+        | Expr::Variable(_)
+        | Expr::Array(_) => 9,
     }
 }
 
 fn binary_precedence(op: BinaryOp) -> u8 {
     match op {
-        BinaryOp::Or => 1,
-        BinaryOp::And => 2,
-        BinaryOp::Equal | BinaryOp::NotEqual => 3,
-        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 4,
-        BinaryOp::Add | BinaryOp::Subtract => 5,
-        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 6,
+        BinaryOp::Coalesce => 1,
+        BinaryOp::Or => 2,
+        BinaryOp::And => 3,
+        BinaryOp::Equal | BinaryOp::NotEqual => 4,
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 5,
+        BinaryOp::Add | BinaryOp::Subtract => 6,
+        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 7,
     }
 }
 
@@ -375,9 +480,18 @@ fn binary_op(op: BinaryOp) -> &'static str {
         BinaryOp::LessEqual => "<=",
         BinaryOp::Greater => ">",
         BinaryOp::GreaterEqual => ">=",
+        BinaryOp::Coalesce => "??",
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
     }
+}
+
+fn format_float(value: f64) -> String {
+    let mut raw = value.to_string();
+    if !raw.contains('.') && !raw.contains('e') && !raw.contains('E') {
+        raw.push_str(".0");
+    }
+    raw
 }
 
 #[derive(Debug, Clone, Default)]
@@ -593,6 +707,61 @@ print(values[0])
     }
 
     #[test]
+    fn formats_enum_declarations() {
+        let formatted = format_source(
+            r#"
+enum   Status:
+  Pending
+  Ready
+let status:Status=Status.Ready
+"#,
+        )
+        .expect("formatting should pass");
+
+        assert_eq!(
+            formatted,
+            "enum Status:\n    Pending\n    Ready\nlet status: Status = Status.Ready\n"
+        );
+    }
+
+    #[test]
+    fn formats_match_expressions() {
+        let formatted = format_source(
+            r#"
+let label=match status:
+  Status.Pending:
+    "pending"
+  else:
+    "other"
+"#,
+        )
+        .expect("formatting should pass");
+
+        assert_eq!(
+            formatted,
+            "let label = match status:\n    Status.Pending:\n        \"pending\"\n    else:\n        \"other\"\n"
+        );
+    }
+
+    #[test]
+    fn formats_nil_and_nullable_types() {
+        let formatted = format_source(
+            r#"
+let maybe : i64 ? = nil
+let values : [ i64 ? ] = [ nil , 1 ]
+let recovered=maybe??10
+let ratio:f64=3.140
+"#,
+        )
+        .expect("formatting should pass");
+
+        assert_eq!(
+            formatted,
+            "let maybe: i64? = nil\nlet values: [i64?] = [nil, 1]\nlet recovered = maybe ?? 10\nlet ratio: f64 = 3.14\n"
+        );
+    }
+
+    #[test]
     fn formats_blocks_and_elif_chains() {
         let formatted = format_source(
             r#"
@@ -610,6 +779,28 @@ fn label(value:i64)->str:
         assert_eq!(
             formatted,
             "fn label(value: i64) -> str:\n    if value < 0:\n        return \"negative\"\n    elif value == 0:\n        return \"zero\"\n    else:\n        return \"positive\"\n"
+        );
+    }
+
+    #[test]
+    fn formats_if_let_chains() {
+        let formatted = format_source(
+            r#"
+let maybe:i64?=42
+let other:i64?=nil
+if let value=maybe:
+ print(value)
+elif let fallback=other:
+ print(fallback)
+else:
+ print(0)
+"#,
+        )
+        .expect("formatting should pass");
+
+        assert_eq!(
+            formatted,
+            "let maybe: i64? = 42\nlet other: i64? = nil\nif let value = maybe:\n    print(value)\nelif let fallback = other:\n    print(fallback)\nelse:\n    print(0)\n"
         );
     }
 

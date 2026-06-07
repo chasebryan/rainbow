@@ -48,10 +48,18 @@ fn run_cli() -> Result<(), String> {
         [_, command, paths @ ..] if command == "check" => check_files(paths),
         [_, command, args @ ..] if command == "fmt" => fmt_files(args),
         [_, command, paths @ ..] if command == "test" => test_files(paths),
+        [_, path] if is_direct_run_path(path) => run_file(std::slice::from_ref(path)),
         [_, unknown, ..] => Err(format!(
             "unknown command '{unknown}'. Run `fyr help` for usage."
         )),
     }
+}
+
+fn is_direct_run_path(arg: &str) -> bool {
+    Path::new(arg)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        == Some("fyr")
 }
 
 fn run_file(args: &[String]) -> Result<(), String> {
@@ -481,14 +489,24 @@ impl ImportResolver {
 
         self.active.push(path.clone());
         for statement in program.statements {
-            match statement {
-                Statement::Import {
-                    path: import_path, ..
-                } => {
-                    let resolved = resolve_import_path(&base, &import_path)?;
-                    statements.extend(self.load_program(&resolved)?.statements);
-                }
-                statement => statements.push(statement),
+            if let Statement::Import {
+                path: import_path, ..
+            } = &statement
+            {
+                let resolved = resolve_import_path(&base, import_path)
+                    .map_err(|message| format_statement_error(&path, &statement, message))?;
+                let resolved = resolved.canonicalize().map_err(|error| {
+                    format_statement_error(
+                        &path,
+                        &statement,
+                        format!("failed to resolve import \"{import_path}\": {error}"),
+                    )
+                })?;
+                self.ensure_project_import_allowed(&resolved)
+                    .map_err(|message| format_statement_error(&path, &statement, message))?;
+                statements.extend(self.load_program(&resolved)?.statements);
+            } else {
+                statements.push(statement);
             }
         }
         self.active.pop();
@@ -519,6 +537,16 @@ fn load_program(path: &Path) -> Result<Program, String> {
 
 fn check_program_for_path(path: &Path, program: &Program) -> Result<(), String> {
     typecheck::check(program).map_err(|error| format_fyr_error(path, error))
+}
+
+fn format_statement_error(
+    fallback_path: &Path,
+    statement: &Statement,
+    message: impl Into<String>,
+) -> String {
+    let error =
+        FyrError::new(message, statement.span()).with_fallback_source_path(statement.source_path());
+    format_fyr_error(fallback_path, error)
 }
 
 fn format_fyr_error(path: &Path, error: FyrError) -> String {
@@ -708,6 +736,7 @@ fn print_help() {
     println!();
     println!("Usage:");
     println!("  fyr              Start the REPL");
+    println!("  fyr <file.fyr>   Run a Fyr source file");
     println!("  fyr repl         Start the REPL");
     println!("  fyr init [dir]   Create a Fyr project in a directory");
     println!("  fyr new <dir>    Create a Fyr project in a new directory");
@@ -838,6 +867,14 @@ mod tests {
     fn project_name_is_safe_for_manifest_text() {
         assert_eq!(project_name(Path::new("hello fyr!")), "hello-fyr");
         assert_eq!(project_name(Path::new("fyr_project")), "fyr_project");
+    }
+
+    #[test]
+    fn direct_run_paths_are_fyr_files() {
+        assert!(is_direct_run_path("hello.fyr"));
+        assert!(is_direct_run_path("/tmp/project/src/main.fyr"));
+        assert!(!is_direct_run_path("run"));
+        assert!(!is_direct_run_path("hello.txt"));
     }
 
     #[test]
@@ -997,6 +1034,40 @@ answer()
     }
 
     #[test]
+    fn missing_imports_report_import_statement_location() {
+        let root = temp_project_dir("import_missing_path");
+        fs::create_dir_all(root.join("src")).expect("source dir should create");
+        let main = root.join("src/main.fyr");
+        fs::write(&main, "import \"missing.fyr\"\n").expect("main should write");
+
+        let error = load_program(&main).expect_err("missing import should fail");
+
+        assert!(error.contains(&main.display().to_string()));
+        assert!(error.contains(":1:1:"));
+        assert!(error.contains("failed to resolve import \"missing.fyr\""));
+        assert!(error.contains("1 | import \"missing.fyr\""));
+        assert!(error.contains("  | ^"));
+        fs::remove_dir_all(root).expect("test project should clean up");
+    }
+
+    #[test]
+    fn invalid_import_paths_report_import_statement_location() {
+        let root = temp_project_dir("import_invalid_path");
+        fs::create_dir_all(root.join("src")).expect("source dir should create");
+        let main = root.join("src/main.fyr");
+        fs::write(&main, "import \"lib.txt\"\n").expect("main should write");
+
+        let error = load_program(&main).expect_err("invalid import should fail");
+
+        assert!(error.contains(&main.display().to_string()));
+        assert!(error.contains(":1:1:"));
+        assert!(error.contains("import path must end in .fyr"));
+        assert!(error.contains("1 | import \"lib.txt\""));
+        assert!(error.contains("  | ^"));
+        fs::remove_dir_all(root).expect("test project should clean up");
+    }
+
+    #[test]
     fn fmt_errors_include_file_path() {
         let root = temp_project_dir("fmt_error_path");
         fs::create_dir_all(&root).expect("dir should create");
@@ -1047,6 +1118,40 @@ answer()
         assert!(error.contains("binding 'value' expected i64"));
         assert!(error.contains("1 | let value: i64 = false"));
         assert!(error.contains("  | ^"));
+        fs::remove_dir_all(root).expect("test project should clean up");
+    }
+
+    #[test]
+    fn imported_match_arm_errors_include_imported_file_path() {
+        let root = temp_project_dir("import_match_arm_error_path");
+        fs::create_dir_all(root.join("src")).expect("source dir should create");
+        let lib = root.join("src/lib.fyr");
+        let main = root.join("src/main.fyr");
+        fs::write(
+            &lib,
+            r#"enum Status:
+    Ready
+    Failed
+
+fn label(status: Status) -> str:
+    return match status:
+        Status.Ready:
+            let value: i64 = false
+            "ready"
+        Status.Failed:
+            "failed"
+"#,
+        )
+        .expect("lib should write");
+        fs::write(&main, "import \"lib.fyr\"\n").expect("main should write");
+        let args = vec![main.display().to_string()];
+
+        let error = check_files(&args).expect_err("imported match arm error should fail");
+
+        assert!(error.contains(&lib.display().to_string()));
+        assert!(error.contains(":8:"));
+        assert!(error.contains("binding 'value' expected i64"));
+        assert!(error.contains("8 |             let value: i64 = false"));
         fs::remove_dir_all(root).expect("test project should clean up");
     }
 
@@ -1109,6 +1214,9 @@ fn outside() -> i64:
             load_program(&root.join("src/main.fyr")).expect_err("escaping import should fail");
 
         assert!(error.contains("escapes project root"));
+        assert!(error.contains(&root.join("src/main.fyr").display().to_string()));
+        assert!(error.contains("1 | import"));
+        assert!(error.contains("  | ^"));
         fs::remove_file(outside).expect("outside file should clean up");
         fs::remove_dir_all(root).expect("test project should clean up");
     }

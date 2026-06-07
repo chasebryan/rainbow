@@ -1,0 +1,19 @@
+enum Status:
+    Pending
+    Ready
+    Failed
+fn describe(status: Status) -> str:
+    return match status:
+        Status.Pending:
+            "pending"
+        Status.Ready:
+            "ready"
+        Status.Failed:
+            "failed"
+let status: Status = Status.Ready
+let history: [Status] = [Status.Pending, status, Status.Failed]
+assert(status == Status.Ready, "enum variants should compare by name and variant")
+assert(status != Status.Pending, "different enum variants should not be equal")
+assert(contains(history, Status.Failed), "enum variants should work in arrays")
+assert(describe(status) == "ready", "enum variants should flow through functions")
+print(describe(status))
