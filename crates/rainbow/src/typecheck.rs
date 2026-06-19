@@ -5,7 +5,7 @@ use crate::ast::{
     BinaryOp, EnumVariant, Expr, IfLetPattern, MatchArm, MatchPattern, Param, Program, Statement,
     TypeName, UnaryOp,
 };
-use crate::diagnostic::{FyrError, FyrResult};
+use crate::diagnostic::{RainbowError, RainbowResult};
 use crate::span::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +56,7 @@ impl Display for Type {
     }
 }
 
-pub fn check(program: &Program) -> FyrResult<()> {
+pub fn check(program: &Program) -> RainbowResult<()> {
     Checker::new().check_program(program)
 }
 
@@ -85,7 +85,7 @@ impl Checker {
         }
     }
 
-    fn check_program(mut self, program: &Program) -> FyrResult<()> {
+    fn check_program(mut self, program: &Program) -> RainbowResult<()> {
         self.predeclare_enums(&program.statements)?;
         self.predeclare_structs(&program.statements)?;
         self.validate_enum_payloads(&program.statements)?;
@@ -98,7 +98,7 @@ impl Checker {
         Ok(())
     }
 
-    fn predeclare_enums(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predeclare_enums(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Enum { name, variants, .. } = statement {
                 let span = statement.span();
@@ -120,7 +120,7 @@ impl Checker {
         Ok(())
     }
 
-    fn predeclare_structs(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predeclare_structs(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Struct { name, fields, .. } = statement {
                 let span = statement.span();
@@ -148,7 +148,7 @@ impl Checker {
         Ok(())
     }
 
-    fn validate_enum_payloads(&self, statements: &[Statement]) -> FyrResult<()> {
+    fn validate_enum_payloads(&self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             let Statement::Enum { name, variants, .. } = statement else {
                 continue;
@@ -172,7 +172,7 @@ impl Checker {
         Ok(())
     }
 
-    fn predeclare_functions(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predeclare_functions(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Fn {
                 name,
@@ -194,7 +194,7 @@ impl Checker {
         Ok(())
     }
 
-    fn check_statement(&mut self, statement: &Statement) -> FyrResult<Type> {
+    fn check_statement(&mut self, statement: &Statement) -> RainbowResult<Type> {
         let span = statement.span();
         let source_path = statement.source_path();
         let result = match statement {
@@ -289,7 +289,7 @@ impl Checker {
         annotation: &TypeName,
         value: &Expr,
         mutable: bool,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let expected = if *annotation == TypeName::Infer {
             None
         } else {
@@ -324,7 +324,7 @@ impl Checker {
         params: &[Param],
         return_type: &TypeName,
         body: &[Statement],
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let signature = self.function_signature(name, params, return_type)?;
         if !self.is_predeclared_top_level_function(name, &signature) {
             self.define(name, signature, false)?;
@@ -354,7 +354,7 @@ impl Checker {
         name: &str,
         params: &[Param],
         return_type: &TypeName,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         reject_inferred_signature(name, params, return_type)?;
         reject_duplicate_members("function", name, "parameter", params)?;
         for param in params {
@@ -377,11 +377,15 @@ impl Checker {
                 .is_some_and(|binding| &binding.ty == signature)
     }
 
-    fn check_expr(&mut self, expr: &Expr) -> FyrResult<Type> {
+    fn check_expr(&mut self, expr: &Expr) -> RainbowResult<Type> {
         self.check_expr_with_hint(expr, None)
     }
 
-    fn check_expr_with_hint(&mut self, expr: &Expr, expected: Option<&Type>) -> FyrResult<Type> {
+    fn check_expr_with_hint(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> RainbowResult<Type> {
         match expr {
             Expr::Int(_) => Ok(Type::I64),
             Expr::Float(_) => Ok(Type::F64),
@@ -407,11 +411,11 @@ impl Checker {
             }
             Expr::Binary { left, op, right } => self.check_binary(left, *op, right, expected),
             Expr::Call { callee, args } => self.check_call(callee, args, expected),
-            Expr::Pipe {
+            Expr::Flow {
                 value,
                 callee,
                 args,
-            } => self.check_pipe(value, callee, args, expected),
+            } => self.check_flow(value, callee, args, expected),
             Expr::StructInit { name, fields } => self.check_struct_init(name, fields),
             Expr::EnumInit {
                 enum_name,
@@ -436,7 +440,7 @@ impl Checker {
         }
     }
 
-    fn check_array(&mut self, elements: &[Expr], expected: Option<&Type>) -> FyrResult<Type> {
+    fn check_array(&mut self, elements: &[Expr], expected: Option<&Type>) -> RainbowResult<Type> {
         let expected_element = match expected {
             Some(Type::Array(element)) => Some(element.as_ref()),
             _ => None,
@@ -480,7 +484,7 @@ impl Checker {
         Ok(Type::Array(Box::new(element_type)))
     }
 
-    fn check_index(&mut self, collection: &Expr, index: &Expr) -> FyrResult<Type> {
+    fn check_index(&mut self, collection: &Expr, index: &Expr) -> RainbowResult<Type> {
         let collection_type = self.check_expr(collection)?;
         match collection_type {
             Type::Array(element_type) => {
@@ -507,7 +511,7 @@ impl Checker {
         }
     }
 
-    fn check_struct_init(&mut self, name: &str, fields: &[(String, Expr)]) -> FyrResult<Type> {
+    fn check_struct_init(&mut self, name: &str, fields: &[(String, Expr)]) -> RainbowResult<Type> {
         let declared_fields = self
             .structs
             .get(name)
@@ -552,7 +556,7 @@ impl Checker {
         Ok(Type::Struct(name.to_owned()))
     }
 
-    fn check_field(&mut self, object: &Expr, field_name: &str) -> FyrResult<Type> {
+    fn check_field(&mut self, object: &Expr, field_name: &str) -> RainbowResult<Type> {
         if let Expr::Variable(enum_name) = object
             && let Some(variants) = self.enums.get(enum_name)
         {
@@ -598,7 +602,7 @@ impl Checker {
         enum_name: &str,
         variant_name: &str,
         value: Option<&Expr>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let variant = self
             .enums
             .get(enum_name)
@@ -651,7 +655,7 @@ impl Checker {
         op: BinaryOp,
         right: &Expr,
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         if op == BinaryOp::Coalesce {
             return self.check_coalesce(left, right, expected);
         }
@@ -706,7 +710,7 @@ impl Checker {
         left: &Expr,
         right: &Expr,
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let left_type = self.check_expr(left)?;
 
         match left_type {
@@ -738,7 +742,7 @@ impl Checker {
         }
     }
 
-    fn check_add(&mut self, left: &Expr, right: &Expr) -> FyrResult<Type> {
+    fn check_add(&mut self, left: &Expr, right: &Expr) -> RainbowResult<Type> {
         let left_type = if is_empty_array_literal(left) {
             None
         } else {
@@ -810,7 +814,7 @@ impl Checker {
         callee: &str,
         args: &[Expr],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         match callee {
             "i64" => self.check_numeric_conversion(callee, args, Type::I64),
             "f64" => self.check_numeric_conversion(callee, args, Type::F64),
@@ -1198,17 +1202,17 @@ impl Checker {
         }
     }
 
-    fn check_pipe(
+    fn check_flow(
         &mut self,
         value: &Expr,
         callee: &str,
         args: &[Expr],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
-        let mut piped_args = Vec::with_capacity(args.len() + 1);
-        piped_args.push(value.clone());
-        piped_args.extend(args.iter().cloned());
-        self.check_call(callee, &piped_args, expected)
+    ) -> RainbowResult<Type> {
+        let mut flowd_args = Vec::with_capacity(args.len() + 1);
+        flowd_args.push(value.clone());
+        flowd_args.extend(args.iter().cloned());
+        self.check_call(callee, &flowd_args, expected)
     }
 
     fn check_numeric_conversion(
@@ -1216,7 +1220,7 @@ impl Checker {
         name: &str,
         args: &[Expr],
         result: Type,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         if args.len() != 1 {
             return Err(type_error(format!("{name} expects exactly one argument")));
         }
@@ -1229,7 +1233,7 @@ impl Checker {
         }
     }
 
-    fn check_string_unary(&mut self, name: &str, args: &[Expr]) -> FyrResult<Type> {
+    fn check_string_unary(&mut self, name: &str, args: &[Expr]) -> RainbowResult<Type> {
         if args.len() != 1 {
             return Err(type_error(format!("{name} expects exactly one argument")));
         }
@@ -1238,7 +1242,7 @@ impl Checker {
         Ok(Type::Str)
     }
 
-    fn check_string_predicate(&mut self, name: &str, args: &[Expr]) -> FyrResult<Type> {
+    fn check_string_predicate(&mut self, name: &str, args: &[Expr]) -> RainbowResult<Type> {
         if args.len() != 2 {
             return Err(type_error(format!("{name} expects exactly two arguments")));
         }
@@ -1248,7 +1252,7 @@ impl Checker {
         Ok(Type::Bool)
     }
 
-    fn check_replace(&mut self, args: &[Expr]) -> FyrResult<Type> {
+    fn check_replace(&mut self, args: &[Expr]) -> RainbowResult<Type> {
         if args.len() != 3 {
             return Err(type_error("replace expects exactly three arguments"));
         }
@@ -1259,7 +1263,7 @@ impl Checker {
         Ok(Type::Str)
     }
 
-    fn check_split(&mut self, args: &[Expr]) -> FyrResult<Type> {
+    fn check_split(&mut self, args: &[Expr]) -> RainbowResult<Type> {
         if args.len() != 2 {
             return Err(type_error("split expects exactly two arguments"));
         }
@@ -1269,7 +1273,7 @@ impl Checker {
         Ok(Type::Array(Box::new(Type::Str)))
     }
 
-    fn check_join(&mut self, args: &[Expr]) -> FyrResult<Type> {
+    fn check_join(&mut self, args: &[Expr]) -> RainbowResult<Type> {
         if args.len() != 2 {
             return Err(type_error("join expects exactly two arguments"));
         }
@@ -1285,7 +1289,7 @@ impl Checker {
         Ok(Type::Str)
     }
 
-    fn check_string_arg(&mut self, arg: &Expr, context: &str) -> FyrResult<()> {
+    fn check_string_arg(&mut self, arg: &Expr, context: &str) -> RainbowResult<()> {
         let found = self.check_expr(arg)?;
         if found != Type::Str {
             return Err(type_error(format!("{context} expected str, found {found}")));
@@ -1298,7 +1302,7 @@ impl Checker {
         name: &str,
         args: &[Expr],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         if args.len() != 2 {
             return Err(type_error(format!("{name} expects exactly two arguments")));
         }
@@ -1338,7 +1342,7 @@ impl Checker {
         then_branch: &[Statement],
         else_branch: &[Statement],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let condition_type = self.check_expr(condition)?;
         if condition_type != Type::Bool {
             return Err(expected_type("bool", &condition_type));
@@ -1378,7 +1382,7 @@ impl Checker {
         condition: &Expr,
         then_branch: &[Statement],
         else_branch: &[Statement],
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         if !if_chain_has_final_else(else_branch) {
             let condition_type = self.check_expr(condition)?;
             if condition_type != Type::Bool {
@@ -1399,7 +1403,7 @@ impl Checker {
         then_branch: &[Statement],
         else_branch: &[Statement],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let binding = self.check_if_let_pattern(pattern, value)?;
         let (then_type, else_type) = if expected.is_none()
             && block_ends_with_array_hint_hole(then_branch)
@@ -1436,7 +1440,7 @@ impl Checker {
         value: &Expr,
         then_branch: &[Statement],
         else_branch: &[Statement],
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let binding = self.check_if_let_pattern(pattern, value)?;
 
         if !if_chain_has_final_else(else_branch) {
@@ -1458,7 +1462,7 @@ impl Checker {
         &mut self,
         pattern: &'a IfLetPattern,
         value: &Expr,
-    ) -> FyrResult<Option<(&'a str, Type)>> {
+    ) -> RainbowResult<Option<(&'a str, Type)>> {
         match pattern {
             IfLetPattern::Binding { name } => match self.check_expr(value)? {
                 Type::Nullable(inner) => Ok(Some((name.as_str(), *inner))),
@@ -1513,7 +1517,7 @@ impl Checker {
         binding: Option<(&str, Type)>,
         then_branch: &[Statement],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         self.push_scope();
         if let Some((name, binding_type)) = binding {
             self.define(name, binding_type, false)?;
@@ -1528,7 +1532,7 @@ impl Checker {
         value: &Expr,
         arms: &[MatchArm],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let Type::Struct(enum_name) = self.check_expr(value)? else {
             return Err(type_error("match expected an enum value"));
         };
@@ -1631,7 +1635,7 @@ impl Checker {
     fn infer_match_array_hint(
         &mut self,
         arms: &[(&MatchArm, Option<(String, Type)>)],
-    ) -> FyrResult<Option<Type>> {
+    ) -> RainbowResult<Option<Type>> {
         for (arm, payload_binding) in arms {
             if block_ends_with_array_hint_hole(&arm.body) {
                 continue;
@@ -1651,7 +1655,7 @@ impl Checker {
         arm: &MatchArm,
         payload_binding: Option<&(String, Type)>,
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         if let Some((binding, ty)) = payload_binding {
             self.push_scope();
             let result = self
@@ -1664,7 +1668,7 @@ impl Checker {
         }
     }
 
-    fn check_return(&mut self, value: Option<&Expr>) -> FyrResult<Type> {
+    fn check_return(&mut self, value: Option<&Expr>) -> RainbowResult<Type> {
         let Some(expected) = self.return_types.last().cloned() else {
             return Err(type_error("return outside function"));
         };
@@ -1683,7 +1687,7 @@ impl Checker {
         Ok(Type::Never)
     }
 
-    fn check_while(&mut self, condition: &Expr, body: &[Statement]) -> FyrResult<()> {
+    fn check_while(&mut self, condition: &Expr, body: &[Statement]) -> RainbowResult<()> {
         let condition_type = self.check_expr(condition)?;
         if condition_type != Type::Bool {
             return Err(expected_type("bool", &condition_type));
@@ -1696,7 +1700,7 @@ impl Checker {
         Ok(())
     }
 
-    fn check_for(&mut self, name: &str, iterable: &Expr, body: &[Statement]) -> FyrResult<()> {
+    fn check_for(&mut self, name: &str, iterable: &Expr, body: &[Statement]) -> RainbowResult<()> {
         let iterable_type = self.check_expr(iterable)?;
         let element_type = match iterable_type {
             Type::Array(element_type) => *element_type,
@@ -1718,7 +1722,7 @@ impl Checker {
         Ok(())
     }
 
-    fn check_block_scoped(&mut self, statements: &[Statement]) -> FyrResult<Type> {
+    fn check_block_scoped(&mut self, statements: &[Statement]) -> RainbowResult<Type> {
         self.check_block_scoped_with_hint(statements, None)
     }
 
@@ -1726,14 +1730,14 @@ impl Checker {
         &mut self,
         statements: &[Statement],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         self.push_scope();
         let result = self.check_block_with_hint(statements, expected);
         self.pop_scope();
         result
     }
 
-    fn check_block(&mut self, statements: &[Statement]) -> FyrResult<Type> {
+    fn check_block(&mut self, statements: &[Statement]) -> RainbowResult<Type> {
         self.check_block_with_hint(statements, None)
     }
 
@@ -1741,7 +1745,7 @@ impl Checker {
         &mut self,
         statements: &[Statement],
         expected: Option<&Type>,
-    ) -> FyrResult<Type> {
+    ) -> RainbowResult<Type> {
         let mut last_type = Type::Unit;
         let last_index = statements.len().saturating_sub(1);
 
@@ -1764,7 +1768,7 @@ impl Checker {
         Ok(last_type)
     }
 
-    fn define(&mut self, name: &str, ty: Type, mutable: bool) -> FyrResult<()> {
+    fn define(&mut self, name: &str, ty: Type, mutable: bool) -> RainbowResult<()> {
         if self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.current_scope().contains_key(name)
@@ -1812,7 +1816,7 @@ impl TypeName {
 }
 
 impl Checker {
-    fn validate_type_name(&self, ty: &TypeName) -> FyrResult<()> {
+    fn validate_type_name(&self, ty: &TypeName) -> RainbowResult<()> {
         match ty {
             TypeName::Infer
             | TypeName::I64
@@ -1833,7 +1837,7 @@ fn reject_inferred_signature(
     name: &str,
     params: &[Param],
     return_type: &TypeName,
-) -> FyrResult<()> {
+) -> RainbowResult<()> {
     for param in params {
         if param.ty == TypeName::Infer {
             return Err(type_error(format!(
@@ -1857,7 +1861,7 @@ fn reject_duplicate_members(
     owner_name: &str,
     member_kind: &str,
     members: &[Param],
-) -> FyrResult<()> {
+) -> RainbowResult<()> {
     let mut seen = HashSet::new();
 
     for member in members {
@@ -1877,7 +1881,7 @@ fn reject_duplicate_variants(
     owner_name: &str,
     member_kind: &str,
     members: &[EnumVariant],
-) -> FyrResult<()> {
+) -> RainbowResult<()> {
     let mut seen = HashSet::new();
 
     for member in members {
@@ -1996,12 +2000,12 @@ fn array_type_hint(ty: &Type) -> Option<&Type> {
     matches!(ty, Type::Array(_)).then_some(ty)
 }
 
-fn expected_type(expected: &str, found: &Type) -> FyrError {
+fn expected_type(expected: &str, found: &Type) -> RainbowError {
     type_error(format!("expected {expected}, found {found}"))
 }
 
-fn type_error(message: impl Into<String>) -> FyrError {
-    FyrError::new(message, Span::new(0, 0))
+fn type_error(message: impl Into<String>) -> RainbowError {
+    RainbowError::new(message, Span::new(0, 0))
 }
 
 #[cfg(test)]
@@ -2010,7 +2014,7 @@ mod tests {
     use crate::lexer::lex;
     use crate::parser::parse;
 
-    fn typecheck(source: &str) -> FyrResult<()> {
+    fn typecheck(source: &str) -> RainbowResult<()> {
         let tokens = lex(source)?;
         let program = parse(&tokens)?;
         check(&program)
@@ -2881,9 +2885,9 @@ sum(values)
     fn accepts_string_indexing() {
         typecheck(
             r#"
-let name = "Fyr"
+let name = "Rainbow"
 let first: str = name[0]
-let second: str = "Fyr"[1]
+let second: str = "Rainbow"[1]
 assert(first == "F")
 assert(second == "y")
 "#,
@@ -2917,24 +2921,24 @@ assert(uppered == "FAST SECURE SIMPLE")
     }
 
     #[test]
-    fn accepts_pipeline_calls() {
+    fn accepts_flow_calls() {
         typecheck(
             r#"
 fn bracket(value: str, left: str, right: str) -> str:
     return left + value + right
 
-let label: str = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
-let has_color: bool = label |> contains("rainbow")
-let size: i64 = label |> len
+let label: str = "  Rainbow  " then trim then lower then bracket("[", "]")
+let has_color: bool = label then contains("rainbow")
+let size: i64 = label then len
 "#,
         )
-        .expect("pipeline calls should typecheck");
+        .expect("flow calls should typecheck");
     }
 
     #[test]
-    fn rejects_pipeline_type_errors() {
+    fn rejects_flow_type_errors() {
         let error =
-            typecheck("let value = 42 |> trim\n").expect_err("pipeline type error should fail");
+            typecheck("let value = 42 then trim\n").expect_err("flow type error should fail");
 
         assert!(error.message.contains("trim expected str"));
     }
@@ -3313,11 +3317,11 @@ sum([1, 2, 3])
         typecheck(
             r#"
 var seen = ""
-for ch in "Fyr":
+for ch in "Rainbow":
     let checked: str = ch
     seen = seen + checked
 
-assert(seen == "Fyr")
+assert(seen == "Rainbow")
 "#,
         )
         .expect("string for loop should typecheck");
@@ -3478,7 +3482,7 @@ struct Point:
 let points = [Point { x: 3, y: 4 }]
 
 assert(contains([1, 2, 3], 2))
-assert(contains("secure Fyr", "Fyr"))
+assert(contains("secure Rainbow", "Rainbow"))
 assert(contains(points, Point { x: 3, y: 4 }))
 "#,
         )
@@ -3491,7 +3495,7 @@ assert(contains(points, Point { x: 3, y: 4 }))
             r#"
 let values = [3, 5, 8, 13, 21]
 let middle: [i64] = slice(values, 1, 4)
-let prefix: str = slice("secure Fyr", 0, 6)
+let prefix: str = slice("secure Rainbow", 0, 6)
 assert(middle == [5, 8, 13])
 assert(prefix == "secure")
 "#,
@@ -3507,7 +3511,7 @@ let values = [3, 5, 8]
 assert(is_empty([]))
 assert(not is_empty(values))
 assert(is_empty(""))
-assert(not is_empty("Fyr"))
+assert(not is_empty("Rainbow"))
 "#,
         )
         .expect("is_empty should typecheck");
@@ -3521,7 +3525,7 @@ let values = [3, 5, 8]
 let found: i64 = get(values, 1, -1)
 let fallback = get(values, 99, -1)
 let inferred = get([], 0, 42)
-let letter: str = get("Fyr", 1, "?")
+let letter: str = get("Rainbow", 1, "?")
 assert(found == 5)
 assert(fallback == -1)
 assert(inferred == 42)
@@ -3545,9 +3549,9 @@ let inferred_last = last([], 42)
 let rows = [[1, 2]]
 let first_row: [i64] = first(rows, [])
 let fallback_row: [i64] = first([], [])
-let reversed_text: str = reverse("Fyr")
-let first_letter: str = first("Fyr", "?")
-let last_letter: str = last("Fyr", "?")
+let reversed_text: str = reverse("Rainbow")
+let first_letter: str = first("Rainbow", "?")
+let last_letter: str = last("Rainbow", "?")
 assert(reversed == [8, 5, 3])
 assert(len(reversed_empty) == 0)
 assert(first_value == 3)
@@ -3556,7 +3560,7 @@ assert(inferred_first == 42)
 assert(inferred_last == 42)
 assert(first_row == [1, 2])
 assert(len(fallback_row) == 0)
-assert(reversed_text == "ryF")
+assert(reversed_text == "wobniaR")
 assert(first_letter == "F")
 assert(last_letter == "r")
 "#,
@@ -3577,7 +3581,7 @@ let points = [Point { x: 3, y: 4 }]
 let empty_index = find([], 21)
 let value_index = find(values, 5)
 let point_index = find(points, Point { x: 3, y: 4 })
-let text_index = find("secure Fyr", "Fyr")
+let text_index = find("secure Rainbow", "Rainbow")
 assert(empty_index == -1)
 assert(value_index == 1)
 assert(point_index == 0)
@@ -3600,7 +3604,7 @@ assert(text_index == 7)
             typecheck("find([1, 2, 3], true)\n").expect_err("array needle should fail");
         assert!(array_error.message.contains("find expected i64"));
 
-        let string_error = typecheck("find(\"Fyr\", 1)\n").expect_err("str needle should fail");
+        let string_error = typecheck("find(\"Rainbow\", 1)\n").expect_err("str needle should fail");
         assert!(
             string_error
                 .message
@@ -3628,7 +3632,7 @@ let points = [Point { x: 3, y: 4 }]
 let empty_count = count([], 21)
 let value_count = count(values, 3)
 let point_count = count(points, Point { x: 3, y: 4 })
-let text_count = count("secure Fyr secure", "secure")
+let text_count = count("secure Rainbow secure", "secure")
 assert(empty_count == 0)
 assert(value_count == 3)
 assert(point_count == 1)
@@ -3651,7 +3655,8 @@ assert(text_count == 2)
             typecheck("count([1, 2, 3], true)\n").expect_err("array needle should fail");
         assert!(array_error.message.contains("count expected i64"));
 
-        let string_error = typecheck("count(\"Fyr\", 1)\n").expect_err("str needle should fail");
+        let string_error =
+            typecheck("count(\"Rainbow\", 1)\n").expect_err("str needle should fail");
         assert!(
             string_error
                 .message
@@ -3704,7 +3709,8 @@ assert(len(fallback) == 0)
             typecheck("get([1, 2, 3], 0, true)\n").expect_err("array default should fail");
         assert!(array_error.message.contains("get default expected i64"));
 
-        let string_error = typecheck("get(\"Fyr\", 0, 0)\n").expect_err("str default should fail");
+        let string_error =
+            typecheck("get(\"Rainbow\", 0, 0)\n").expect_err("str default should fail");
         assert!(string_error.message.contains("get default expected str"));
     }
 
@@ -3764,7 +3770,8 @@ assert(len(fallback) == 0)
             typecheck("first([1, 2, 3], true)\n").expect_err("first default should fail");
         assert!(first_default.message.contains("first default expected i64"));
 
-        let last_default = typecheck("last(\"Fyr\", 0)\n").expect_err("last default should fail");
+        let last_default =
+            typecheck("last(\"Rainbow\", 0)\n").expect_err("last default should fail");
         assert!(last_default.message.contains("last default expected str"));
 
         let arity = typecheck("first([1, 2, 3])\n").expect_err("first arity should fail");
@@ -3828,8 +3835,8 @@ assert(len(fallback) == 0)
 
     #[test]
     fn rejects_contains_string_needle_type_mismatch() {
-        let error =
-            typecheck("contains(\"fyr\", 1)\n").expect_err("contains string mismatch should fail");
+        let error = typecheck("contains(\"rainbow\", 1)\n")
+            .expect_err("contains string mismatch should fail");
 
         assert!(error.message.contains("contains(str, value) expected str"));
     }
@@ -4043,7 +4050,7 @@ assert(is_empty(from_match))
 
     #[test]
     fn rejects_invalid_string_indexing() {
-        let index = typecheck("\"Fyr\"[true]\n").expect_err("string index should fail");
+        let index = typecheck("\"Rainbow\"[true]\n").expect_err("string index should fail");
         assert!(index.message.contains("string index expected i64"));
 
         let collection = typecheck("42[0]\n").expect_err("primitive indexing should fail");
@@ -4060,14 +4067,14 @@ assert(is_empty(from_match))
         assert!(transform.message.contains("trim expected str"));
 
         let predicate =
-            typecheck("starts_with(\"Fyr\", 1)\n").expect_err("starts_with type should fail");
+            typecheck("starts_with(\"Rainbow\", 1)\n").expect_err("starts_with type should fail");
         assert!(predicate.message.contains("starts_with value expected str"));
 
-        let replace =
-            typecheck("replace(\"Fyr\", \"y\", 1)\n").expect_err("replace new type should fail");
+        let replace = typecheck("replace(\"Rainbow\", \"y\", 1)\n")
+            .expect_err("replace new type should fail");
         assert!(replace.message.contains("replace new expected str"));
 
-        let split = typecheck("split(\"Fyr\", 1)\n").expect_err("split separator should fail");
+        let split = typecheck("split(\"Rainbow\", 1)\n").expect_err("split separator should fail");
         assert!(split.message.contains("split separator expected str"));
 
         let join_collection =
@@ -4078,7 +4085,7 @@ assert(is_empty(from_match))
             typecheck("join([1], \",\")\n").expect_err("join element type should fail");
         assert!(join_element.message.contains("join expects [str]"));
 
-        let arity = typecheck("split(\"Fyr\")\n").expect_err("split arity should fail");
+        let arity = typecheck("split(\"Rainbow\")\n").expect_err("split arity should fail");
         assert!(
             arity
                 .message

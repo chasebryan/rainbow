@@ -3,17 +3,17 @@ use std::path::{Path, PathBuf};
 
 use crate::span::Span;
 
-pub type FyrResult<T> = Result<T, FyrError>;
+pub type RainbowResult<T> = Result<T, RainbowError>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FyrError {
+pub struct RainbowError {
     pub message: String,
     pub line: usize,
     pub column: usize,
     pub file: Option<PathBuf>,
 }
 
-impl FyrError {
+impl RainbowError {
     pub fn new(message: impl Into<String>, span: Span) -> Self {
         Self {
             message: message.into(),
@@ -48,12 +48,12 @@ impl FyrError {
     }
 }
 
-impl Display for FyrError {
+impl Display for RainbowError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         if let Some(file) = &self.file {
             write!(
                 f,
-                "fyr error at {}:{}:{}: {}",
+                "rainbow error at {}:{}:{}: {}",
                 file.display(),
                 self.line,
                 self.column,
@@ -62,11 +62,11 @@ impl Display for FyrError {
         } else {
             write!(
                 f,
-                "fyr error at {}:{}: {}",
+                "rainbow error at {}:{}: {}",
                 self.line, self.column, self.message
             )
         }
     }
 }
 
-impl std::error::Error for FyrError {}
+impl std::error::Error for RainbowError {}

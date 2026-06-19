@@ -1,0 +1,11 @@
+# Flow calls read left to right.
+fn bracket(value: str, left: str, right: str) -> str:
+    return left + value + right
+let label = "  Rainbow  " then trim then lower then bracket("[", "]")
+let words = "fast safe beautiful" then split(" ")
+let joined = words then join(" | ")
+assert(label == "[rainbow]")
+assert(label then contains("rainbow"))
+assert(joined == "fast | safe | beautiful")
+print(label)
+print(joined)

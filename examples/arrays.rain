@@ -12,7 +12,7 @@ let value_count = count(more_values, 13)
 let reversed_values = reverse(more_values)
 let first_value = first(more_values, -1)
 let last_value = last(more_values, -1)
-let last_letter = last("Fyr", "?")
+let last_letter = last("Rainbow", "?")
 let empty: [i64] = []
 print(sum(more_values))
 print(more_values[2])

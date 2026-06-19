@@ -2,11 +2,11 @@ use crate::ast::{
     BinaryOp, EnumVariant, Expr, IfLetPattern, MatchArm, MatchPattern, Param, Program, Statement,
     TypeName, UnaryOp,
 };
-use crate::diagnostic::{FyrError, FyrResult};
+use crate::diagnostic::{RainbowError, RainbowResult};
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
 
-pub fn parse(tokens: &[Token]) -> FyrResult<Program> {
+pub fn parse(tokens: &[Token]) -> RainbowResult<Program> {
     Parser::new(tokens).parse()
 }
 
@@ -20,7 +20,7 @@ impl<'a> Parser<'a> {
         Self { tokens, current: 0 }
     }
 
-    fn parse(mut self) -> FyrResult<Program> {
+    fn parse(mut self) -> RainbowResult<Program> {
         let mut statements = Vec::new();
 
         self.skip_newlines();
@@ -32,7 +32,7 @@ impl<'a> Parser<'a> {
         Ok(Program { statements })
     }
 
-    fn statement(&mut self) -> FyrResult<Statement> {
+    fn statement(&mut self) -> RainbowResult<Statement> {
         if self.match_kind(&TokenKind::Let) {
             return self.let_statement(self.previous().span);
         }
@@ -99,11 +99,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn let_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn let_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected an identifier after 'let'",
                     self.previous().span,
                 ));
@@ -123,11 +123,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn var_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn var_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected an identifier after 'var'",
                     self.previous().span,
                 ));
@@ -147,7 +147,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn assignment_statement(&mut self) -> FyrResult<Statement> {
+    fn assignment_statement(&mut self) -> RainbowResult<Statement> {
         let token = self.advance();
         let name = match &token.kind {
             TokenKind::Identifier(name) => name.clone(),
@@ -165,11 +165,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn fn_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn fn_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected a function name after 'fn'",
                     self.previous().span,
                 ));
@@ -197,11 +197,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn struct_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn struct_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected a struct name after 'struct'",
                     self.previous().span,
                 ));
@@ -219,11 +219,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn enum_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn enum_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected an enum name after 'enum'",
                     self.previous().span,
                 ));
@@ -241,11 +241,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn import_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn import_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let path = match &self.advance().kind {
             TokenKind::Str(path) => path.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected a string path after 'import'",
                     self.previous().span,
                 ));
@@ -259,7 +259,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn struct_fields(&mut self) -> FyrResult<Vec<Param>> {
+    fn struct_fields(&mut self) -> RainbowResult<Vec<Param>> {
         self.consume(
             &TokenKind::Newline,
             "expected a newline before struct fields",
@@ -272,7 +272,7 @@ impl<'a> Parser<'a> {
             let field_name = match &self.advance().kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a field name in struct",
                         self.previous().span,
                     ));
@@ -289,7 +289,7 @@ impl<'a> Parser<'a> {
         }
 
         if fields.is_empty() {
-            return Err(FyrError::new(
+            return Err(RainbowError::new(
                 "expected at least one field in struct",
                 self.peek().span,
             ));
@@ -299,7 +299,7 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
-    fn enum_variants(&mut self) -> FyrResult<Vec<EnumVariant>> {
+    fn enum_variants(&mut self) -> RainbowResult<Vec<EnumVariant>> {
         self.consume(
             &TokenKind::Newline,
             "expected a newline before enum variants",
@@ -314,7 +314,7 @@ impl<'a> Parser<'a> {
             let name = match &token.kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new("expected a variant name in enum", span));
+                    return Err(RainbowError::new("expected a variant name in enum", span));
                 }
             };
 
@@ -338,7 +338,7 @@ impl<'a> Parser<'a> {
         }
 
         if variants.is_empty() {
-            return Err(FyrError::new(
+            return Err(RainbowError::new(
                 "expected at least one variant in enum",
                 self.peek().span,
             ));
@@ -348,7 +348,7 @@ impl<'a> Parser<'a> {
         Ok(variants)
     }
 
-    fn while_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn while_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let condition = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after while condition")?;
         let body = self.block("while body")?;
@@ -361,11 +361,11 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn for_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn for_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected an identifier after 'for'",
                     self.previous().span,
                 ));
@@ -386,7 +386,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn if_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn if_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         if self.match_kind(&TokenKind::Let) {
             let (pattern, value) = self.if_let_header()?;
             let then_branch = self.block("if let body")?;
@@ -416,7 +416,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn return_statement(&mut self, span: Span) -> FyrResult<Statement> {
+    fn return_statement(&mut self, span: Span) -> RainbowResult<Statement> {
         let value = if self.check_statement_boundary() {
             None
         } else {
@@ -430,7 +430,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parameter_list(&mut self) -> FyrResult<Vec<Param>> {
+    fn parameter_list(&mut self) -> RainbowResult<Vec<Param>> {
         let mut params = Vec::new();
 
         if self.check(&TokenKind::RParen) {
@@ -442,7 +442,7 @@ impl<'a> Parser<'a> {
             let name = match &token.kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a parameter name",
                         self.previous().span,
                     ));
@@ -464,7 +464,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn optional_type_annotation(&mut self) -> FyrResult<TypeName> {
+    fn optional_type_annotation(&mut self) -> RainbowResult<TypeName> {
         if self.match_kind(&TokenKind::Colon) {
             self.type_name()
         } else {
@@ -472,7 +472,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn type_name(&mut self) -> FyrResult<TypeName> {
+    fn type_name(&mut self) -> RainbowResult<TypeName> {
         let mut ty = self.primary_type_name()?;
 
         while self.match_kind(&TokenKind::Question) {
@@ -482,7 +482,7 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    fn primary_type_name(&mut self) -> FyrResult<TypeName> {
+    fn primary_type_name(&mut self) -> RainbowResult<TypeName> {
         let token = self.advance();
 
         match &token.kind {
@@ -497,11 +497,11 @@ impl<'a> Parser<'a> {
             TokenKind::Identifier(name) if name == "str" => Ok(TypeName::Str),
             TokenKind::Identifier(name) if name == "unit" => Ok(TypeName::Unit),
             TokenKind::Identifier(name) => Ok(TypeName::Struct(name.clone())),
-            _ => Err(FyrError::new("expected a type name", token.span)),
+            _ => Err(RainbowError::new("expected a type name", token.span)),
         }
     }
 
-    fn expression(&mut self) -> FyrResult<Expr> {
+    fn expression(&mut self) -> RainbowResult<Expr> {
         if self.match_kind(&TokenKind::If) {
             return self.if_expression();
         }
@@ -513,7 +513,7 @@ impl<'a> Parser<'a> {
         self.coalesce()
     }
 
-    fn if_expression(&mut self) -> FyrResult<Expr> {
+    fn if_expression(&mut self) -> RainbowResult<Expr> {
         if self.match_kind(&TokenKind::Let) {
             let (pattern, value) = self.if_let_header()?;
             let then_branch = self.block("if let body")?;
@@ -539,7 +539,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn if_statement_tail(&mut self) -> FyrResult<Vec<Statement>> {
+    fn if_statement_tail(&mut self) -> RainbowResult<Vec<Statement>> {
         self.skip_newlines();
 
         if self.match_kind(&TokenKind::Elif) {
@@ -554,7 +554,7 @@ impl<'a> Parser<'a> {
         Ok(Vec::new())
     }
 
-    fn if_expression_tail(&mut self) -> FyrResult<Vec<Statement>> {
+    fn if_expression_tail(&mut self) -> RainbowResult<Vec<Statement>> {
         self.skip_newlines();
 
         if self.match_kind(&TokenKind::Elif) {
@@ -566,7 +566,7 @@ impl<'a> Parser<'a> {
         self.block("else body")
     }
 
-    fn elif_tail(&mut self, require_else: bool, span: Span) -> FyrResult<Vec<Statement>> {
+    fn elif_tail(&mut self, require_else: bool, span: Span) -> RainbowResult<Vec<Statement>> {
         if self.match_kind(&TokenKind::Let) {
             let (pattern, value) = self.if_let_header()?;
             let then_branch = self.block("elif let body")?;
@@ -604,7 +604,7 @@ impl<'a> Parser<'a> {
         }])
     }
 
-    fn match_expression(&mut self) -> FyrResult<Expr> {
+    fn match_expression(&mut self) -> RainbowResult<Expr> {
         let value = self.coalesce()?;
         self.consume(&TokenKind::Colon, "expected ':' after match value")?;
         let arms = self.match_arms()?;
@@ -615,7 +615,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn match_arms(&mut self) -> FyrResult<Vec<MatchArm>> {
+    fn match_arms(&mut self) -> RainbowResult<Vec<MatchArm>> {
         self.consume(&TokenKind::Newline, "expected a newline before match arms")?;
         self.consume(&TokenKind::Indent, "expected indented match arms")?;
         self.skip_newlines();
@@ -625,7 +625,7 @@ impl<'a> Parser<'a> {
         while !self.check(&TokenKind::Dedent) && !self.is_at_end() {
             let span = self.peek().span;
             if saw_else {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "match else arm must be last",
                     self.peek().span,
                 ));
@@ -644,7 +644,7 @@ impl<'a> Parser<'a> {
         }
 
         if arms.is_empty() {
-            return Err(FyrError::new(
+            return Err(RainbowError::new(
                 "expected at least one arm in match",
                 self.peek().span,
             ));
@@ -654,7 +654,7 @@ impl<'a> Parser<'a> {
         Ok(arms)
     }
 
-    fn match_pattern(&mut self) -> FyrResult<MatchPattern> {
+    fn match_pattern(&mut self) -> RainbowResult<MatchPattern> {
         if self.match_kind(&TokenKind::Else) {
             return Ok(MatchPattern::Else);
         }
@@ -662,7 +662,7 @@ impl<'a> Parser<'a> {
         let enum_name = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected an enum variant or else in match arm",
                     self.previous().span,
                 ));
@@ -672,7 +672,7 @@ impl<'a> Parser<'a> {
         let variant = match &self.advance().kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected a variant name in match arm",
                     self.previous().span,
                 ));
@@ -684,7 +684,7 @@ impl<'a> Parser<'a> {
             let binding = match &token.kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a payload binding name in match arm",
                         token.span,
                     ));
@@ -706,12 +706,12 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn if_let_header(&mut self) -> FyrResult<(IfLetPattern, Expr)> {
+    fn if_let_header(&mut self) -> RainbowResult<(IfLetPattern, Expr)> {
         let token = self.advance();
         let first_name = match &token.kind {
             TokenKind::Identifier(name) => name.clone(),
             _ => {
-                return Err(FyrError::new(
+                return Err(RainbowError::new(
                     "expected a binding name or enum variant after let",
                     token.span,
                 ));
@@ -722,7 +722,7 @@ impl<'a> Parser<'a> {
             let variant = match &self.advance().kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a variant name in if let pattern",
                         self.previous().span,
                     ));
@@ -733,7 +733,7 @@ impl<'a> Parser<'a> {
                 let binding = match &token.kind {
                     TokenKind::Identifier(name) => name.clone(),
                     _ => {
-                        return Err(FyrError::new(
+                        return Err(RainbowError::new(
                             "expected a payload binding name in if let pattern",
                             token.span,
                         ));
@@ -762,8 +762,8 @@ impl<'a> Parser<'a> {
         Ok((pattern, value))
     }
 
-    fn coalesce(&mut self) -> FyrResult<Expr> {
-        let expr = self.pipeline()?;
+    fn coalesce(&mut self) -> RainbowResult<Expr> {
+        let expr = self.flow()?;
 
         if self.match_kind(&TokenKind::QuestionQuestion) {
             let right = self.coalesce()?;
@@ -777,15 +777,15 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn pipeline(&mut self) -> FyrResult<Expr> {
+    fn flow(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.or()?;
 
-        while self.match_kind(&TokenKind::PipeForward) {
+        while self.match_kind(&TokenKind::Then) {
             let callee = match &self.advance().kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
-                        "expected a function name after '|>'",
+                    return Err(RainbowError::new(
+                        "expected a function name after flow keyword",
                         self.previous().span,
                     ));
                 }
@@ -801,10 +801,10 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                self.consume(&TokenKind::RParen, "expected ')' after pipeline arguments")?;
+                self.consume(&TokenKind::RParen, "expected ')' after flow arguments")?;
             }
 
-            expr = Expr::Pipe {
+            expr = Expr::Flow {
                 value: Box::new(expr),
                 callee,
                 args,
@@ -814,7 +814,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn or(&mut self) -> FyrResult<Expr> {
+    fn or(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.and()?;
 
         while self.match_kind(&TokenKind::OrOr) {
@@ -829,7 +829,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn and(&mut self) -> FyrResult<Expr> {
+    fn and(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.equality()?;
 
         while self.match_kind(&TokenKind::AndAnd) {
@@ -844,7 +844,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn equality(&mut self) -> FyrResult<Expr> {
+    fn equality(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.comparison()?;
 
         while let Some(op) = self.match_binary(&[
@@ -862,7 +862,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn comparison(&mut self) -> FyrResult<Expr> {
+    fn comparison(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.term()?;
 
         while let Some(op) = self.match_binary(&[
@@ -882,7 +882,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn term(&mut self) -> FyrResult<Expr> {
+    fn term(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.factor()?;
 
         while let Some(op) = self.match_binary(&[
@@ -900,7 +900,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn factor(&mut self) -> FyrResult<Expr> {
+    fn factor(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.unary()?;
 
         while let Some(op) = self.match_binary(&[
@@ -919,7 +919,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn unary(&mut self) -> FyrResult<Expr> {
+    fn unary(&mut self) -> RainbowResult<Expr> {
         if self.match_kind(&TokenKind::Bang) {
             let expr = self.unary()?;
             return Ok(Expr::Unary {
@@ -939,7 +939,7 @@ impl<'a> Parser<'a> {
         self.call()
     }
 
-    fn call(&mut self) -> FyrResult<Expr> {
+    fn call(&mut self) -> RainbowResult<Expr> {
         let mut expr = self.primary()?;
 
         loop {
@@ -959,13 +959,13 @@ impl<'a> Parser<'a> {
                     Expr::Variable(callee) => Expr::Call { callee, args },
                     Expr::Field { object, field } => {
                         let Expr::Variable(enum_name) = *object else {
-                            return Err(FyrError::new(
-                                "only named functions and enum variants can be called in Fyr bootstrap",
+                            return Err(RainbowError::new(
+                                "only named functions and enum variants can be called in Rainbow bootstrap",
                                 self.previous().span,
                             ));
                         };
                         if args.len() > 1 {
-                            return Err(FyrError::new(
+                            return Err(RainbowError::new(
                                 "enum variant constructors take at most one payload",
                                 self.previous().span,
                             ));
@@ -977,8 +977,8 @@ impl<'a> Parser<'a> {
                         }
                     }
                     _ => {
-                        return Err(FyrError::new(
-                            "only named functions and enum variants can be called in Fyr bootstrap",
+                        return Err(RainbowError::new(
+                            "only named functions and enum variants can be called in Rainbow bootstrap",
                             self.previous().span,
                         ));
                     }
@@ -988,7 +988,7 @@ impl<'a> Parser<'a> {
 
             if self.match_kind(&TokenKind::LBrace) {
                 let Expr::Variable(name) = expr else {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a struct name before '{'",
                         self.previous().span,
                     ));
@@ -1002,7 +1002,7 @@ impl<'a> Parser<'a> {
                 let field = match &self.advance().kind {
                     TokenKind::Identifier(name) => name.clone(),
                     _ => {
-                        return Err(FyrError::new(
+                        return Err(RainbowError::new(
                             "expected a field name after '.'",
                             self.previous().span,
                         ));
@@ -1031,7 +1031,7 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    fn struct_initializer_fields(&mut self) -> FyrResult<Vec<(String, Expr)>> {
+    fn struct_initializer_fields(&mut self) -> RainbowResult<Vec<(String, Expr)>> {
         let mut fields = Vec::new();
 
         if self.check(&TokenKind::RBrace) {
@@ -1043,7 +1043,7 @@ impl<'a> Parser<'a> {
             let field_name = match &self.advance().kind {
                 TokenKind::Identifier(name) => name.clone(),
                 _ => {
-                    return Err(FyrError::new(
+                    return Err(RainbowError::new(
                         "expected a field name in struct initializer",
                         self.previous().span,
                     ));
@@ -1063,7 +1063,7 @@ impl<'a> Parser<'a> {
         Ok(fields)
     }
 
-    fn primary(&mut self) -> FyrResult<Expr> {
+    fn primary(&mut self) -> RainbowResult<Expr> {
         let token = self.advance();
 
         match &token.kind {
@@ -1080,11 +1080,11 @@ impl<'a> Parser<'a> {
                 self.consume(&TokenKind::RParen, "expected ')' after expression")?;
                 Ok(expr)
             }
-            _ => Err(FyrError::new("expected an expression", token.span)),
+            _ => Err(RainbowError::new("expected an expression", token.span)),
         }
     }
 
-    fn array_literal(&mut self) -> FyrResult<Expr> {
+    fn array_literal(&mut self) -> RainbowResult<Expr> {
         let mut elements = Vec::new();
 
         if self.check(&TokenKind::RBracket) {
@@ -1125,7 +1125,7 @@ impl<'a> Parser<'a> {
         self.check(&TokenKind::Newline) || self.check(&TokenKind::Dedent) || self.is_at_end()
     }
 
-    fn consume_statement_separator(&mut self) -> FyrResult<()> {
+    fn consume_statement_separator(&mut self) -> RainbowResult<()> {
         if self.is_at_end() {
             return Ok(());
         }
@@ -1139,13 +1139,13 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        Err(FyrError::new(
+        Err(RainbowError::new(
             "expected a newline after statement",
             self.peek().span,
         ))
     }
 
-    fn block(&mut self, label: &str) -> FyrResult<Vec<Statement>> {
+    fn block(&mut self, label: &str) -> RainbowResult<Vec<Statement>> {
         self.consume(&TokenKind::Newline, "expected a newline before block")?;
         self.consume(&TokenKind::Indent, "expected an indented block")?;
         self.skip_newlines();
@@ -1157,7 +1157,7 @@ impl<'a> Parser<'a> {
         }
 
         if statements.is_empty() {
-            return Err(FyrError::new(
+            return Err(RainbowError::new(
                 format!("expected at least one statement in {label}"),
                 self.peek().span,
             ));
@@ -1171,11 +1171,11 @@ impl<'a> Parser<'a> {
         while self.match_kind(&TokenKind::Newline) {}
     }
 
-    fn consume(&mut self, kind: &TokenKind, message: &str) -> FyrResult<()> {
+    fn consume(&mut self, kind: &TokenKind, message: &str) -> RainbowResult<()> {
         if self.match_kind(kind) {
             Ok(())
         } else {
-            Err(FyrError::new(message, self.peek().span))
+            Err(RainbowError::new(message, self.peek().span))
         }
     }
 
@@ -1240,13 +1240,13 @@ mod tests {
 
     #[test]
     fn parses_import_statement() {
-        let tokens = lex("import \"lib.fyr\"\n").expect("lexing should pass");
+        let tokens = lex("import \"lib.rain\"\n").expect("lexing should pass");
         let program = parse(&tokens).expect("parsing should pass");
 
         assert_eq!(
             program.statements[0],
             Statement::Import {
-                path: "lib.fyr".to_owned(),
+                path: "lib.rain".to_owned(),
                 span: Span::new(1, 1),
                 source_path: None,
             }
@@ -1270,13 +1270,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_pipeline_expressions() {
-        let tokens = lex("\"  Rainbow  \" |> trim |> lower\n").expect("lexing should pass");
+    fn parses_flow_expressions() {
+        let tokens = lex("\"  Rainbow  \" then trim then lower\n").expect("lexing should pass");
         let program = parse(&tokens).expect("parsing should pass");
 
         let Statement::Expr {
             expr:
-                Expr::Pipe {
+                Expr::Flow {
                     value,
                     callee,
                     args,
@@ -1284,14 +1284,14 @@ mod tests {
             ..
         } = &program.statements[0]
         else {
-            panic!("expected pipeline expression");
+            panic!("expected flow expression");
         };
 
         assert_eq!(callee, "lower");
         assert!(args.is_empty());
         assert!(matches!(
             value.as_ref(),
-            Expr::Pipe {
+            Expr::Flow {
                 callee,
                 ..
             } if callee == "trim"

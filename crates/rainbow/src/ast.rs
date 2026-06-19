@@ -338,7 +338,7 @@ pub enum Expr {
         callee: String,
         args: Vec<Expr>,
     },
-    Pipe {
+    Flow {
         value: Box<Expr>,
         callee: String,
         args: Vec<Expr>,
@@ -397,7 +397,7 @@ impl Expr {
                     arg.set_source_path_recursive(path);
                 }
             }
-            Expr::Pipe { value, args, .. } => {
+            Expr::Flow { value, args, .. } => {
                 value.set_source_path_recursive(path);
                 for arg in args {
                     arg.set_source_path_recursive(path);

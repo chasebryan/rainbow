@@ -2,17 +2,17 @@
 
 Rainbow is a programming language for people who want native speed, strong safety, and code that stays readable under pressure.
 
-The current bootstrap command is still named `fyr`, and source files still use the `.fyr` extension. The language identity is Rainbow; the toolchain rename is a later mechanical step.
+The current bootstrap command is `rainbow`, and source files use the `.rain` extension.
 
 The first thing to learn is the terminal command:
 
 ```sh
-fyr
+rainbow
 ```
 
-With no arguments, `fyr` starts the REPL. That REPL is the front door to the language.
+With no arguments, `rainbow` starts the REPL. That REPL is the front door to the language.
 
-```fyr
+```rainbow
 let answer = 40 + 2
 answer
 ```
@@ -21,7 +21,7 @@ Accepted bindings stay available until the session is reset or closed. The REPL 
 
 ```text
 :help
-:load examples/hello.fyr
+:load examples/hello.rain
 :history
 :reset
 :quit
@@ -32,45 +32,45 @@ Accepted bindings stay available until the session is reset or closed. The REPL 
 When you want a project instead of a loose file, create one:
 
 ```sh
-fyr new hello-rainbow
+rainbow new hello-rainbow
 cd hello-rainbow
-fyr run
-fyr check
-fyr test
-fyr fmt --check
-fyr build
+rainbow run
+rainbow check
+rainbow test
+rainbow fmt --check
+rainbow build
 ```
 
-The Rainbow project manifest is `fyr.toml`:
+The Rainbow project manifest is `rainbow.toml`:
 
 ```toml
 name = "hello-rainbow"
-main = "src/main.fyr"
+main = "src/main.rain"
 ```
 
-Inside a project, `fyr run` uses the manifest `main` file. `fyr check` and `fyr fmt` default to project sources plus tests, and `fyr test` defaults to the project `tests` directory.
+Inside a project, `rainbow run` uses the manifest `main` file. `rainbow check` and `rainbow fmt` default to project sources plus tests, and `rainbow test` defaults to the project `tests` directory.
 
 Use imports when a project grows beyond one file:
 
-```fyr
-import "lib.fyr"
+```rainbow
+import "lib.rain"
 print(greeting("Rainbow"))
 ```
 
-Imports use relative `.fyr` paths. The command resolves imports before typechecking and running, catches import cycles, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, and keeps imported statement locations for type and runtime diagnostics. File-backed diagnostics also show nearby source lines with a caret underline. It only includes the same imported file once for each root file. Inside a project, imports stay inside the nearest `fyr.toml` project root.
+Imports use relative `.rain` paths. The command resolves imports before typechecking and running, catches import cycles, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, and keeps imported statement locations for type and runtime diagnostics. File-backed diagnostics also show nearby source lines with a caret underline. It only includes the same imported file once for each root file. Inside a project, imports stay inside the nearest `rainbow.toml` project root.
 
-`fyr build` writes a checked, import-flattened Rainbow source bundle:
+`rainbow build` writes a checked, import-flattened Rainbow source bundle:
 
 ```sh
-fyr build
-fyr run build/main.fyr
+rainbow build
+rainbow run build/main.rain
 ```
 
 The bootstrap build output is still Rainbow source. Later compiler stages will turn the same project shape toward native artifacts.
 
 Rainbow functions use typed signatures and indented bodies:
 
-```fyr
+```rainbow
 fn fib(n: i64) -> i64:
     if n < 2:
         n
@@ -82,7 +82,7 @@ print(fib(10))
 
 Functions can define local helpers after the values they need are in scope:
 
-```fyr
+```rainbow
 fn doubled(value: i64) -> i64:
     fn double(input: i64) -> i64:
         return input * 2
@@ -92,7 +92,7 @@ fn doubled(value: i64) -> i64:
 
 Mutation is explicit:
 
-```fyr
+```rainbow
 var total = 0
 var i = 1
 
@@ -105,7 +105,7 @@ print(total)
 
 Integer arithmetic is checked. Overflow, division by zero, and remainder by zero stop the program instead of wrapping. Decimal values use `f64`:
 
-```fyr
+```rainbow
 let radius: f64 = 2.5
 let area = 3.14 * radius * radius
 let samples: i64 = 3
@@ -117,7 +117,7 @@ Rainbow keeps `i64` and `f64` separate for now; write the type you want instead 
 
 Use `nil` when a value can be absent, and mark that type with `?`:
 
-```fyr
+```rainbow
 fn score(ready: bool) -> i64?:
     if ready:
         return 42
@@ -138,7 +138,7 @@ Plain `i64` values can flow into `i64?`, but `i64?` cannot flow directly back in
 
 Functions can return early:
 
-```fyr
+```rainbow
 fn first_multiple_of_seven(limit: i64) -> i64:
     var i = 1
     while i <= limit:
@@ -150,7 +150,7 @@ fn first_multiple_of_seven(limit: i64) -> i64:
 
 Use `elif` when a branch has several named cases:
 
-```fyr
+```rainbow
 fn size_label(value: i64) -> str:
     if value < 0:
         return "negative"
@@ -164,7 +164,7 @@ fn size_label(value: i64) -> str:
 
 Structs name the shape of data:
 
-```fyr
+```rainbow
 struct Point:
     x: i64
     y: i64
@@ -175,7 +175,7 @@ print(p.x + p.y)
 
 Enums name a closed set of states, and variants can carry one typed payload:
 
-```fyr
+```rainbow
 enum Status:
     Pending
     Ready
@@ -196,7 +196,7 @@ print(label)
 
 Payload constructors use `Enum.Variant(value)`, and a matching arm can bind that payload:
 
-```fyr
+```rainbow
 enum Result:
     Ok(i64)
     Err(str)
@@ -216,7 +216,7 @@ if let Result.Ok(number) = result:
 
 Arrays collect values of one type:
 
-```fyr
+```rainbow
 fn sum(values: [i64]) -> i64:
     var total = 0
     for value in values:
@@ -247,7 +247,7 @@ print(is_empty(empty))
 
 Strings are indexed and iterable by character:
 
-```fyr
+```rainbow
 fn rebuild(text: str) -> str:
     var rebuilt = ""
     for ch in text:
@@ -270,19 +270,19 @@ print(ends_with(cleaned, "Simple"))
 print(replace(cleaned, "Simple", "Readable"))
 ```
 
-Pipeline calls keep transformations readable from left to right. The value on the left becomes the first argument to the function on the right:
+Flow calls keep transformations readable from left to right. The value on the left becomes the first argument to the function on the right:
 
-```fyr
+```rainbow
 fn bracket(value: str, left: str, right: str) -> str:
     return left + value + right
 
-let label = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
+let label = "  Rainbow  " then trim then lower then bracket("[", "]")
 print(label)
 ```
 
 For counted loops, use `range`. The end is not included:
 
-```fyr
+```rainbow
 var total = 0
 for value in range(1, 11):
     total = total + value
@@ -292,14 +292,14 @@ print(total)
 
 Most bindings can be inferred. Add an annotation when it makes the program clearer or when Rainbow cannot infer the type yet:
 
-```fyr
+```rainbow
 let name: str = "Rainbow"
 var scores: [i64] = []
 ```
 
 Assertions turn ordinary Rainbow files into tests:
 
-```fyr
+```rainbow
 assert(range(5)[4] == 4)
 assert(contains([3, 5, 8, 13], 8))
 assert(is_empty([]))
@@ -338,16 +338,16 @@ assert(total == 55, "total should match the counted loop")
 Run them with:
 
 ```sh
-fyr test examples
+rainbow test examples
 ```
 
 Format Rainbow files with:
 
 ```sh
-fyr fmt --check examples
-fyr fmt examples
+rainbow fmt --check examples
+rainbow fmt examples
 ```
 
-When `fyr check`, `fyr fmt`, or `fyr test` receives a directory, it recursively finds `.fyr` files. The bootstrap formatter preserves line comments while canonicalizing spacing, indentation, and expression layout.
+When `rainbow check`, `rainbow fmt`, or `rainbow test` receives a directory, it recursively finds `.rain` files. The bootstrap formatter preserves line comments while canonicalizing spacing, indentation, and expression layout.
 
 The bootstrap version of Rainbow is intentionally small. Each chapter of this book should track real language behavior as the compiler grows.

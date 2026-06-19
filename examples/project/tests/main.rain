@@ -1,5 +1,5 @@
 # Manifest-based Rainbow project tests.
-import "../src/lib.fyr"
+import "../src/lib.rain"
 assert(greeting("Rainbow project") == "Hello from Rainbow project")
 assert(reverse("Rainbow") == "wobniaR")
 assert(split("fast secure simple", " ") == ["fast", "secure", "simple"])

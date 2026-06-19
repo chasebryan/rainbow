@@ -5,7 +5,7 @@ use crate::ast::{
     BinaryOp, EnumVariant, Expr, IfLetPattern, MatchArm, MatchPattern, Param, Program, Statement,
     TypeName, UnaryOp,
 };
-use crate::diagnostic::{FyrError, FyrResult};
+use crate::diagnostic::{RainbowError, RainbowResult};
 use crate::span::Span;
 
 const EXACT_F64_INTEGER_LIMIT: i64 = 9_007_199_254_740_992;
@@ -158,7 +158,7 @@ impl Evaluator {
         }
     }
 
-    pub fn run(mut self, program: &Program) -> FyrResult<RunResult> {
+    pub fn run(mut self, program: &Program) -> RainbowResult<RunResult> {
         self.predefine_enums(&program.statements)?;
         self.predefine_structs(&program.statements)?;
         self.predefine_functions(&program.statements)?;
@@ -191,7 +191,7 @@ impl Evaluator {
         })
     }
 
-    pub fn eval_statement(&mut self, statement: &Statement) -> FyrResult<Value> {
+    pub fn eval_statement(&mut self, statement: &Statement) -> RainbowResult<Value> {
         match self.eval_statement_flow(statement)? {
             Flow::Value(value) => Ok(value),
             Flow::Return(_) => Err(runtime_error("return outside function")),
@@ -200,14 +200,14 @@ impl Evaluator {
         }
     }
 
-    pub fn predefine_declarations(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    pub fn predefine_declarations(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         self.predefine_enums(statements)?;
         self.predefine_structs(statements)?;
         self.predefine_functions(statements)?;
         Ok(())
     }
 
-    fn eval_statement_flow(&mut self, statement: &Statement) -> FyrResult<Flow> {
+    fn eval_statement_flow(&mut self, statement: &Statement) -> RainbowResult<Flow> {
         let span = statement.span();
         let source_path = statement.source_path();
         let result = match statement {
@@ -286,7 +286,7 @@ impl Evaluator {
         result.map_err(|error| error.with_fallback_location(span, source_path))
     }
 
-    fn predefine_structs(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predefine_structs(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Struct { name, fields, .. } = statement {
                 self.define_struct(name, fields)?;
@@ -296,7 +296,7 @@ impl Evaluator {
         Ok(())
     }
 
-    fn predefine_enums(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predefine_enums(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Enum { name, variants, .. } = statement {
                 self.define_enum(name, variants)?;
@@ -306,7 +306,7 @@ impl Evaluator {
         Ok(())
     }
 
-    fn predefine_functions(&mut self, statements: &[Statement]) -> FyrResult<()> {
+    fn predefine_functions(&mut self, statements: &[Statement]) -> RainbowResult<()> {
         for statement in statements {
             if let Statement::Fn {
                 name,
@@ -329,7 +329,7 @@ impl Evaluator {
         params: &[Param],
         return_type: &TypeName,
         body: &[Statement],
-    ) -> FyrResult<()> {
+    ) -> RainbowResult<()> {
         reject_inferred_signature(name, params, return_type)?;
         reject_duplicate_members("function", name, "parameter", params)?;
 
@@ -345,7 +345,7 @@ impl Evaluator {
         )
     }
 
-    fn define_struct(&mut self, name: &str, fields: &[Param]) -> FyrResult<()> {
+    fn define_struct(&mut self, name: &str, fields: &[Param]) -> RainbowResult<()> {
         if self.structs.contains_key(name)
             || self.enums.contains_key(name)
             || self.current_scope().contains_key(name)
@@ -367,7 +367,7 @@ impl Evaluator {
         Ok(())
     }
 
-    fn define_enum(&mut self, name: &str, variants: &[EnumVariant]) -> FyrResult<()> {
+    fn define_enum(&mut self, name: &str, variants: &[EnumVariant]) -> RainbowResult<()> {
         if self.enums.contains_key(name)
             || self.structs.contains_key(name)
             || self.current_scope().contains_key(name)
@@ -389,7 +389,7 @@ impl Evaluator {
         Ok(())
     }
 
-    fn eval_value(&mut self, expr: &Expr) -> FyrResult<Value> {
+    fn eval_value(&mut self, expr: &Expr) -> RainbowResult<Value> {
         match self.eval_expr_flow(expr)? {
             Flow::Value(value) => Ok(value),
             Flow::Return(value) => Err(runtime_error(format!(
@@ -402,18 +402,16 @@ impl Evaluator {
         }
     }
 
-    fn eval_expr_flow(&mut self, expr: &Expr) -> FyrResult<Flow> {
+    fn eval_expr_flow(&mut self, expr: &Expr) -> RainbowResult<Flow> {
         match expr {
             Expr::Int(value) => Ok(Flow::Value(Value::Int(*value))),
             Expr::Float(value) => Ok(Flow::Value(Value::Float(*value))),
             Expr::Bool(value) => Ok(Flow::Value(Value::Bool(*value))),
             Expr::Str(value) => Ok(Flow::Value(Value::Str(value.clone()))),
             Expr::Nil => Ok(Flow::Value(Value::Nil)),
-            Expr::Variable(name) => {
-                self.lookup(name).cloned().map(Flow::Value).ok_or_else(|| {
-                    FyrError::new(format!("unknown binding '{name}'"), Span::new(0, 0))
-                })
-            }
+            Expr::Variable(name) => self.lookup(name).cloned().map(Flow::Value).ok_or_else(|| {
+                RainbowError::new(format!("unknown binding '{name}'"), Span::new(0, 0))
+            }),
             Expr::Unary { op, expr } => {
                 let value = match self.eval_expr_flow(expr)? {
                     Flow::Value(value) => value,
@@ -423,11 +421,11 @@ impl Evaluator {
             }
             Expr::Binary { left, op, right } => self.eval_binary(left, *op, right),
             Expr::Call { callee, args } => self.eval_call(callee, args),
-            Expr::Pipe {
+            Expr::Flow {
                 value,
                 callee,
                 args,
-            } => self.eval_pipe(value, callee, args),
+            } => self.eval_flow(value, callee, args),
             Expr::StructInit { name, fields } => self.eval_struct_init(name, fields),
             Expr::EnumInit {
                 enum_name,
@@ -452,7 +450,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_array(&mut self, elements: &[Expr]) -> FyrResult<Flow> {
+    fn eval_array(&mut self, elements: &[Expr]) -> RainbowResult<Flow> {
         let mut values = Vec::with_capacity(elements.len());
 
         for element in elements {
@@ -466,7 +464,7 @@ impl Evaluator {
         Ok(Flow::Value(Value::Array(values)))
     }
 
-    fn eval_index(&mut self, collection: &Expr, index: &Expr) -> FyrResult<Flow> {
+    fn eval_index(&mut self, collection: &Expr, index: &Expr) -> RainbowResult<Flow> {
         let collection = match self.eval_expr_flow(collection)? {
             Flow::Value(value) => value,
             flow => return Ok(flow),
@@ -526,7 +524,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_struct_init(&mut self, name: &str, fields: &[(String, Expr)]) -> FyrResult<Flow> {
+    fn eval_struct_init(&mut self, name: &str, fields: &[(String, Expr)]) -> RainbowResult<Flow> {
         let declared_fields = self
             .structs
             .get(name)
@@ -590,7 +588,7 @@ impl Evaluator {
         }))
     }
 
-    fn eval_field(&mut self, object: &Expr, field: &str) -> FyrResult<Flow> {
+    fn eval_field(&mut self, object: &Expr, field: &str) -> RainbowResult<Flow> {
         if let Expr::Variable(enum_name) = object
             && let Some(variants) = self.enums.get(enum_name)
         {
@@ -631,7 +629,7 @@ impl Evaluator {
         enum_name: &str,
         variant_name: &str,
         value: Option<&Expr>,
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         let variant = self
             .enums
             .get(enum_name)
@@ -687,7 +685,7 @@ impl Evaluator {
         }))
     }
 
-    fn eval_unary(&self, op: UnaryOp, value: Value) -> FyrResult<Value> {
+    fn eval_unary(&self, op: UnaryOp, value: Value) -> RainbowResult<Value> {
         match (op, value) {
             (UnaryOp::Negate, Value::Int(value)) => checked_int("negation", value.checked_neg()),
             (UnaryOp::Negate, Value::Float(value)) => checked_float("negation", -value),
@@ -697,7 +695,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> FyrResult<Flow> {
+    fn eval_binary(&mut self, left: &Expr, op: BinaryOp, right: &Expr) -> RainbowResult<Flow> {
         if op == BinaryOp::Coalesce {
             let left = match self.eval_expr_flow(left)? {
                 Flow::Value(value) => value,
@@ -824,7 +822,7 @@ impl Evaluator {
         Ok(Flow::Value(value))
     }
 
-    fn expect_bool(&mut self, expr: &Expr) -> FyrResult<Flow> {
+    fn expect_bool(&mut self, expr: &Expr) -> RainbowResult<Flow> {
         match self.eval_expr_flow(expr)? {
             Flow::Value(Value::Bool(value)) => Ok(Flow::Value(Value::Bool(value))),
             Flow::Value(other) => type_error("bool", &other),
@@ -832,7 +830,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_call(&mut self, callee: &str, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_call(&mut self, callee: &str, args: &[Expr]) -> RainbowResult<Flow> {
         match callee {
             "i64" => self.eval_numeric_conversion(callee, args),
             "f64" => self.eval_numeric_conversion(callee, args),
@@ -901,14 +899,14 @@ impl Evaluator {
         }
     }
 
-    fn eval_pipe(&mut self, value: &Expr, callee: &str, args: &[Expr]) -> FyrResult<Flow> {
-        let mut piped_args = Vec::with_capacity(args.len() + 1);
-        piped_args.push(value.clone());
-        piped_args.extend(args.iter().cloned());
-        self.eval_call(callee, &piped_args)
+    fn eval_flow(&mut self, value: &Expr, callee: &str, args: &[Expr]) -> RainbowResult<Flow> {
+        let mut flowd_args = Vec::with_capacity(args.len() + 1);
+        flowd_args.push(value.clone());
+        flowd_args.extend(args.iter().cloned());
+        self.eval_call(callee, &flowd_args)
     }
 
-    fn eval_numeric_conversion(&mut self, name: &str, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_numeric_conversion(&mut self, name: &str, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 1 {
             return Err(runtime_error(format!(
                 "{name} expects exactly one argument"
@@ -956,7 +954,7 @@ impl Evaluator {
         args: &[Expr],
         name: &str,
         transform: fn(String) -> String,
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         if args.len() != 1 {
             return Err(runtime_error(format!(
                 "{name} expects exactly one argument"
@@ -972,7 +970,7 @@ impl Evaluator {
         args: &[Expr],
         name: &str,
         predicate: fn(&str, &str) -> bool,
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error(format!(
                 "{name} expects exactly two arguments"
@@ -984,7 +982,7 @@ impl Evaluator {
         Ok(Flow::Value(Value::Bool(predicate(&value, &needle))))
     }
 
-    fn eval_replace(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_replace(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 3 {
             return Err(runtime_error("replace expects exactly three arguments"));
         }
@@ -1001,7 +999,7 @@ impl Evaluator {
         )))
     }
 
-    fn eval_split(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_split(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("split expects exactly two arguments"));
         }
@@ -1020,7 +1018,7 @@ impl Evaluator {
         )))
     }
 
-    fn eval_join(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_join(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("join expects exactly two arguments"));
         }
@@ -1041,7 +1039,7 @@ impl Evaluator {
         Ok(Flow::Value(Value::Str(parts.join(&separator))))
     }
 
-    fn eval_string_arg(&mut self, arg: &Expr, context: &str) -> FyrResult<String> {
+    fn eval_string_arg(&mut self, arg: &Expr, context: &str) -> RainbowResult<String> {
         match self.eval_value(arg)? {
             Value::Str(value) => Ok(value),
             other => Err(runtime_error(format!(
@@ -1051,7 +1049,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_count(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_count(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("count expects exactly two arguments"));
         }
@@ -1095,7 +1093,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_find(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_find(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("find expects exactly two arguments"));
         }
@@ -1137,7 +1135,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_get(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_get(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 3 {
             return Err(runtime_error("get expects exactly three arguments"));
         }
@@ -1193,7 +1191,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_is_empty(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_is_empty(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 1 {
             return Err(runtime_error("is_empty expects exactly one argument"));
         }
@@ -1213,7 +1211,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_append(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_append(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("append expects exactly two arguments"));
         }
@@ -1240,7 +1238,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_reverse(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_reverse(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 1 {
             return Err(runtime_error("reverse expects exactly one argument"));
         }
@@ -1264,7 +1262,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_edge(&mut self, args: &[Expr], edge: Edge) -> FyrResult<Flow> {
+    fn eval_edge(&mut self, args: &[Expr], edge: Edge) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error(format!(
                 "{} expects exactly two arguments",
@@ -1309,7 +1307,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_slice(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_slice(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 3 {
             return Err(runtime_error("slice expects exactly three arguments"));
         }
@@ -1356,7 +1354,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_contains(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_contains(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if args.len() != 2 {
             return Err(runtime_error("contains expects exactly two arguments"));
         }
@@ -1394,7 +1392,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_range(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_range(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if !(1..=2).contains(&args.len()) {
             return Err(runtime_error("range expects one or two arguments"));
         }
@@ -1434,7 +1432,7 @@ impl Evaluator {
         Ok(Flow::Value(Value::Array(values)))
     }
 
-    fn eval_assert(&mut self, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_assert(&mut self, args: &[Expr]) -> RainbowResult<Flow> {
         if !(1..=2).contains(&args.len()) {
             return Err(runtime_error("assert expects one or two arguments"));
         }
@@ -1474,7 +1472,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_user_call(&mut self, callee: &str, args: &[Expr]) -> FyrResult<Flow> {
+    fn eval_user_call(&mut self, callee: &str, args: &[Expr]) -> RainbowResult<Flow> {
         let function = match self.lookup(callee).cloned() {
             Some(Value::Function(function)) => function,
             Some(other) => {
@@ -1539,7 +1537,7 @@ impl Evaluator {
         condition: &Expr,
         then_branch: &[Statement],
         else_branch: &[Statement],
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         match self.eval_expr_flow(condition)? {
             Flow::Value(Value::Bool(true)) => self.eval_block_scoped(then_branch),
             Flow::Value(Value::Bool(false)) => self.eval_block_scoped(else_branch),
@@ -1554,7 +1552,7 @@ impl Evaluator {
         value: &Expr,
         then_branch: &[Statement],
         else_branch: &[Statement],
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         let value = match self.eval_expr_flow(value)? {
             Flow::Value(value) => value,
             flow => return Ok(flow),
@@ -1574,7 +1572,11 @@ impl Evaluator {
         result
     }
 
-    fn eval_if_let_pattern(&self, pattern: &IfLetPattern, value: Value) -> FyrResult<IfLetMatch> {
+    fn eval_if_let_pattern(
+        &self,
+        pattern: &IfLetPattern,
+        value: Value,
+    ) -> RainbowResult<IfLetMatch> {
         match pattern {
             IfLetPattern::Binding { name } => {
                 if value == Value::Nil {
@@ -1646,7 +1648,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_match(&mut self, value: &Expr, arms: &[MatchArm]) -> FyrResult<Flow> {
+    fn eval_match(&mut self, value: &Expr, arms: &[MatchArm]) -> RainbowResult<Flow> {
         let value = match self.eval_expr_flow(value)? {
             Flow::Value(value) => value,
             flow => return Ok(flow),
@@ -1755,7 +1757,7 @@ impl Evaluator {
         arm: &MatchArm,
         payload_type: Option<&TypeName>,
         payload: Option<&Value>,
-    ) -> FyrResult<Flow> {
+    ) -> RainbowResult<Flow> {
         let MatchPattern::Variant { binding, .. } = &arm.pattern else {
             return self.eval_block_scoped(&arm.body);
         };
@@ -1779,7 +1781,7 @@ impl Evaluator {
         result
     }
 
-    fn eval_while(&mut self, condition: &Expr, body: &[Statement]) -> FyrResult<Flow> {
+    fn eval_while(&mut self, condition: &Expr, body: &[Statement]) -> RainbowResult<Flow> {
         loop {
             match self.eval_expr_flow(condition)? {
                 Flow::Value(Value::Bool(true)) => match self.eval_block_scoped(body)? {
@@ -1795,7 +1797,7 @@ impl Evaluator {
         }
     }
 
-    fn eval_for(&mut self, name: &str, iterable: &Expr, body: &[Statement]) -> FyrResult<Flow> {
+    fn eval_for(&mut self, name: &str, iterable: &Expr, body: &[Statement]) -> RainbowResult<Flow> {
         let iterable = match self.eval_expr_flow(iterable)? {
             Flow::Value(value) => value,
             flow => return Ok(flow),
@@ -1833,14 +1835,14 @@ impl Evaluator {
         Ok(Flow::Value(Value::Unit))
     }
 
-    fn eval_block_scoped(&mut self, statements: &[Statement]) -> FyrResult<Flow> {
+    fn eval_block_scoped(&mut self, statements: &[Statement]) -> RainbowResult<Flow> {
         self.push_scope();
         let result = self.eval_block(statements);
         self.pop_scope();
         result
     }
 
-    fn eval_block(&mut self, statements: &[Statement]) -> FyrResult<Flow> {
+    fn eval_block(&mut self, statements: &[Statement]) -> RainbowResult<Flow> {
         let mut last_value = Value::Unit;
 
         for statement in statements {
@@ -1863,7 +1865,7 @@ impl Evaluator {
         annotation: &TypeName,
         value: Value,
         mutable: bool,
-    ) -> FyrResult<()> {
+    ) -> RainbowResult<()> {
         let ty = if *annotation == TypeName::Infer {
             if value == Value::Nil {
                 return Err(runtime_error(format!(
@@ -1885,7 +1887,13 @@ impl Evaluator {
         self.define(name, value, ty, mutable)
     }
 
-    fn define(&mut self, name: &str, value: Value, ty: TypeName, mutable: bool) -> FyrResult<()> {
+    fn define(
+        &mut self,
+        name: &str,
+        value: Value,
+        ty: TypeName,
+        mutable: bool,
+    ) -> RainbowResult<()> {
         if self.structs.contains_key(name) || self.enums.contains_key(name) {
             return Err(runtime_error(format!("binding '{name}' already exists")));
         }
@@ -1908,7 +1916,7 @@ impl Evaluator {
             .expect("evaluator always has a scope")
     }
 
-    fn assign(&mut self, name: &str, value: Value) -> FyrResult<()> {
+    fn assign(&mut self, name: &str, value: Value) -> RainbowResult<()> {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(binding) = scope.get_mut(name) {
                 if !binding.mutable {
@@ -1973,7 +1981,7 @@ impl Value {
     }
 }
 
-fn type_error<T>(expected: &str, actual: &Value) -> FyrResult<T> {
+fn type_error<T>(expected: &str, actual: &Value) -> RainbowResult<T> {
     Err(runtime_error(format!(
         "expected {expected}, found {}",
         actual.type_name()
@@ -1984,7 +1992,7 @@ fn reject_inferred_signature(
     name: &str,
     params: &[Param],
     return_type: &TypeName,
-) -> FyrResult<()> {
+) -> RainbowResult<()> {
     for param in params {
         if param.ty == TypeName::Infer {
             return Err(runtime_error(format!(
@@ -2008,7 +2016,7 @@ fn reject_duplicate_members(
     owner_name: &str,
     member_kind: &str,
     members: &[Param],
-) -> FyrResult<()> {
+) -> RainbowResult<()> {
     let mut seen = HashMap::new();
 
     for member in members {
@@ -2094,7 +2102,7 @@ fn format_array_type(values: &[Value]) -> String {
         .unwrap_or_else(|| "array".to_owned())
 }
 
-fn ensure_homogeneous_array(values: &[Value], context: &str) -> FyrResult<()> {
+fn ensure_homogeneous_array(values: &[Value], context: &str) -> RainbowResult<()> {
     let Some(expected) = array_element_type(values) else {
         return Ok(());
     };
@@ -2112,7 +2120,7 @@ fn ensure_homogeneous_array(values: &[Value], context: &str) -> FyrResult<()> {
     Ok(())
 }
 
-fn ensure_array_concat_matches(left: &[Value], right: &Value) -> FyrResult<()> {
+fn ensure_array_concat_matches(left: &[Value], right: &Value) -> RainbowResult<()> {
     let Value::Array(right) = right else {
         unreachable!("array concatenation only calls this helper for arrays")
     };
@@ -2149,7 +2157,7 @@ fn ensure_array_concat_matches(left: &[Value], right: &Value) -> FyrResult<()> {
     Ok(())
 }
 
-fn ensure_array_item_matches(values: &[Value], value: &Value, context: &str) -> FyrResult<()> {
+fn ensure_array_item_matches(values: &[Value], value: &Value, context: &str) -> RainbowResult<()> {
     let Some(expected) = array_element_type(values) else {
         return Ok(());
     };
@@ -2165,11 +2173,15 @@ fn ensure_array_item_matches(values: &[Value], value: &Value, context: &str) -> 
     )))
 }
 
-fn ensure_array_fallback_matches(values: &[Value], value: &Value, context: &str) -> FyrResult<()> {
+fn ensure_array_fallback_matches(
+    values: &[Value],
+    value: &Value,
+    context: &str,
+) -> RainbowResult<()> {
     ensure_array_item_matches(values, value, context)
 }
 
-fn expect_string_array(values: Vec<Value>, context: &str) -> FyrResult<Vec<String>> {
+fn expect_string_array(values: Vec<Value>, context: &str) -> RainbowResult<Vec<String>> {
     let mut strings = Vec::with_capacity(values.len());
 
     for value in values {
@@ -2215,13 +2227,13 @@ fn type_has_infer(ty: &TypeName) -> bool {
     }
 }
 
-fn checked_int(operation: &str, value: Option<i64>) -> FyrResult<Value> {
+fn checked_int(operation: &str, value: Option<i64>) -> RainbowResult<Value> {
     value
         .map(Value::Int)
         .ok_or_else(|| runtime_error(format!("integer overflow in {operation}")))
 }
 
-fn checked_float(operation: &str, value: f64) -> FyrResult<Value> {
+fn checked_float(operation: &str, value: f64) -> RainbowResult<Value> {
     if value.is_finite() {
         Ok(Value::Float(value))
     } else {
@@ -2239,7 +2251,7 @@ fn format_float(value: f64) -> String {
     raw
 }
 
-fn checked_slice_bounds(start: i64, end: i64, len: usize) -> FyrResult<(usize, usize)> {
+fn checked_slice_bounds(start: i64, end: i64, len: usize) -> RainbowResult<(usize, usize)> {
     if start < 0 {
         return Err(runtime_error(format!(
             "slice start must be >= 0, found {start}"
@@ -2278,7 +2290,7 @@ fn checked_slice_bounds(start: i64, end: i64, len: usize) -> FyrResult<(usize, u
     Ok((start, end))
 }
 
-fn values_equal(left: &Value, right: &Value) -> FyrResult<bool> {
+fn values_equal(left: &Value, right: &Value) -> RainbowResult<bool> {
     match (left, right) {
         (Value::Function(_), _) | (_, Value::Function(_)) => {
             Err(runtime_error("functions cannot be compared for equality"))
@@ -2325,8 +2337,8 @@ fn values_equal(left: &Value, right: &Value) -> FyrResult<bool> {
     }
 }
 
-fn runtime_error(message: impl Into<String>) -> FyrError {
-    FyrError::new(message, Span::new(0, 0))
+fn runtime_error(message: impl Into<String>) -> RainbowError {
+    RainbowError::new(message, Span::new(0, 0))
 }
 
 #[cfg(test)]
@@ -2335,7 +2347,7 @@ mod tests {
     use crate::lexer::lex;
     use crate::parser::parse;
 
-    fn run(source: &str) -> FyrResult<RunResult> {
+    fn run(source: &str) -> RainbowResult<RunResult> {
         let tokens = lex(source)?;
         let program = parse(&tokens)?;
         Evaluator::new().run(&program)
@@ -2560,9 +2572,9 @@ fn answer() -> i64:
 
     #[test]
     fn supports_string_concat() {
-        let result = run("\"Fy\" + \"r\"\n").expect("program should run");
+        let result = run("\"Rain\" + \"bow\"\n").expect("program should run");
 
-        assert_eq!(result.last_value, Value::Str("Fyr".to_owned()));
+        assert_eq!(result.last_value, Value::Str("Rainbow".to_owned()));
     }
 
     #[test]
@@ -3384,10 +3396,10 @@ total
     #[test]
     fn supports_string_indexing() {
         let result = run(r#"
-let name = "Fyr"
-assert(name[0] == "F")
-assert(name[1] == "y")
-assert(name[2] == "r")
+let name = "Rainbow"
+assert(name[0] == "R")
+assert(name[1] == "a")
+assert(name[2] == "i")
 "#)
         .expect("string indexing should run");
 
@@ -3403,8 +3415,8 @@ let words = split(lower(trimmed), " ")
 let joined = join(words, "-")
 
 assert(trimmed == "Fast Secure Simple")
-assert(lower("FYR") == "fyr")
-assert(upper("fyr") == "FYR")
+assert(lower("RAINBOW") == "rainbow")
+assert(upper("rainbow") == "RAINBOW")
 assert(starts_with(trimmed, "Fast"))
 assert(ends_with(trimmed, "Simple"))
 assert(replace(trimmed, "Simple", "Readable") == "Fast Secure Readable")
@@ -3418,17 +3430,17 @@ assert(join([], ",") == "")
     }
 
     #[test]
-    fn supports_pipeline_calls() {
+    fn supports_flow_calls() {
         let result = run(r#"
 fn bracket(value: str, left: str, right: str) -> str:
     return left + value + right
 
-let label = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
+let label = "  Rainbow  " then trim then lower then bracket("[", "]")
 assert(label == "[rainbow]")
-assert((label |> contains("rainbow")))
-label |> len
+assert((label then contains("rainbow")))
+label then len
 "#)
-        .expect("pipeline calls should run");
+        .expect("flow calls should run");
 
         assert_eq!(result.last_value, Value::Int(9));
     }
@@ -3459,22 +3471,22 @@ total
     fn runs_for_loop_over_string() {
         let result = run(r#"
 var seen = ""
-for ch in "Fyr":
+for ch in "Rainbow":
     seen = seen + ch
 
 seen
 "#)
         .expect("string for loop should run");
 
-        assert_eq!(result.last_value, Value::Str("Fyr".to_owned()));
+        assert_eq!(result.last_value, Value::Str("Rainbow".to_owned()));
     }
 
     #[test]
     fn supports_control_flow_in_string_for_loop() {
         let result = run(r#"
 var seen = ""
-for ch in "Fyr!":
-    if ch == "y":
+for ch in "Rainbow!":
+    if ch == "a":
         continue
     if ch == "!":
         break
@@ -3484,7 +3496,7 @@ seen
 "#)
         .expect("string for loop control flow should run");
 
-        assert_eq!(result.last_value, Value::Str("Fr".to_owned()));
+        assert_eq!(result.last_value, Value::Str("Rinbow".to_owned()));
     }
 
     #[test]
@@ -3621,7 +3633,7 @@ let points = [Point { x: 3, y: 4 }]
 
 assert(contains([1, 2, 3], 2))
 assert(not contains([1, 2, 3], 4))
-assert(contains("secure Fyr", "Fyr"))
+assert(contains("secure Rainbow", "Rainbow"))
 assert(contains(points, Point { x: 3, y: 4 }))
 "#)
         .expect("contains should run");
@@ -3634,8 +3646,8 @@ assert(contains(points, Point { x: 3, y: 4 }))
         let result = run(r#"
 assert(slice([3, 5, 8, 13, 21], 1, 4) == [5, 8, 13])
 assert(slice([3, 5, 8], 2, 2) == [])
-assert(slice("secure Fyr", 0, 6) == "secure")
-assert(slice("Fyr", 1, 3) == "yr")
+assert(slice("secure Rainbow", 0, 6) == "secure")
+assert(slice("Rainbow", 1, 4) == "ain")
 "#)
         .expect("slice should run");
 
@@ -3648,7 +3660,7 @@ assert(slice("Fyr", 1, 3) == "yr")
 assert(is_empty([]))
 assert(not is_empty([1]))
 assert(is_empty(""))
-assert(not is_empty("Fyr"))
+assert(not is_empty("Rainbow"))
 "#)
         .expect("is_empty should run");
 
@@ -3662,8 +3674,8 @@ assert(get([3, 5, 8], 1, -1) == 5)
 assert(get([3, 5, 8], 9, -1) == -1)
 assert(get([3, 5, 8], -1, -1) == -1)
 assert(get([], 0, 42) == 42)
-assert(get("Fyr", 1, "?") == "y")
-assert(get("Fyr", 9, "?") == "?")
+assert(get("Rainbow", 1, "?") == "a")
+assert(get("Rainbow", 9, "?") == "?")
 "#)
         .expect("get should run");
 
@@ -3683,8 +3695,8 @@ assert(find([3, 5, 8], 5) == 1)
 assert(find([3, 5, 8], 21) == -1)
 assert(find([], 21) == -1)
 assert(find(points, Point { x: 5, y: 12 }) == 1)
-assert(find("secure Fyr", "Fyr") == 7)
-assert(find("secure Fyr", "missing") == -1)
+assert(find("secure Rainbow", "Rainbow") == 7)
+assert(find("secure Rainbow", "missing") == -1)
 "#)
         .expect("find should run");
 
@@ -3704,10 +3716,10 @@ assert(count([3, 5, 3, 8, 3], 3) == 3)
 assert(count([3, 5, 8], 21) == 0)
 assert(count([], 21) == 0)
 assert(count(points, Point { x: 3, y: 4 }) == 2)
-assert(count("secure Fyr secure", "secure") == 2)
+assert(count("secure Rainbow secure", "secure") == 2)
 assert(count("aaaa", "aa") == 2)
-assert(count("secure Fyr", "missing") == 0)
-assert(count("Fyr", "") == 0)
+assert(count("secure Rainbow", "missing") == 0)
+assert(count("Rainbow", "") == 0)
 "#)
         .expect("count should run");
 
@@ -3723,9 +3735,9 @@ assert(first(values, -1) == 3)
 assert(last(values, -1) == 8)
 assert(first([], 42) == 42)
 assert(last([], 42) == 42)
-assert(reverse("Fyr") == "ryF")
-assert(first("Fyr", "?") == "F")
-assert(last("Fyr", "?") == "r")
+assert(reverse("Rainbow") == "wobniaR")
+assert(first("Rainbow", "?") == "R")
+assert(last("Rainbow", "?") == "w")
 assert(first("", "?") == "?")
 assert(last("", "?") == "?")
 "#)
@@ -3739,7 +3751,7 @@ assert(last("", "?") == "?")
         let collection = run("find(42, 1)\n").expect_err("find collection should fail");
         assert!(collection.message.contains("find expects an array or str"));
 
-        let needle = run("find(\"Fyr\", 1)\n").expect_err("find string needle should fail");
+        let needle = run("find(\"Rainbow\", 1)\n").expect_err("find string needle should fail");
         assert!(needle.message.contains("find(str, value) expected str"));
     }
 
@@ -3748,7 +3760,7 @@ assert(last("", "?") == "?")
         let collection = run("count(42, 1)\n").expect_err("count collection should fail");
         assert!(collection.message.contains("count expects an array or str"));
 
-        let needle = run("count(\"Fyr\", 1)\n").expect_err("count string needle should fail");
+        let needle = run("count(\"Rainbow\", 1)\n").expect_err("count string needle should fail");
         assert!(needle.message.contains("count(str, value) expected str"));
     }
 
@@ -3777,8 +3789,8 @@ assert(last("", "?") == "?")
         let reversed = run("slice([1, 2, 3], 2, 1)\n").expect_err("reversed slice should fail");
         assert!(reversed.message.contains("must be <= end"));
 
-        let too_far = run("slice(\"Fyr\", 0, 4)\n").expect_err("oversized end should fail");
-        assert!(too_far.message.contains("slice end 4 out of bounds"));
+        let too_far = run("slice(\"Rainbow\", 0, 8)\n").expect_err("oversized end should fail");
+        assert!(too_far.message.contains("slice end 8 out of bounds"));
     }
 
     #[test]
@@ -3792,7 +3804,7 @@ assert(last("", "?") == "?")
 
     #[test]
     fn rejects_contains_type_errors_at_runtime() {
-        let error = run("contains(\"fyr\", 1)\n").expect_err("contains should fail");
+        let error = run("contains(\"rainbow\", 1)\n").expect_err("contains should fail");
 
         assert!(error.message.contains("contains(str, value) expected str"));
     }
@@ -3841,7 +3853,7 @@ assert(last("", "?") == "?")
         let last_default = run("last(\"\", 0)\n").expect_err("last default should fail");
         assert!(last_default.message.contains("last default expected str"));
 
-        let get_default = run("get(\"Fyr\", 9, 0)\n").expect_err("get default should fail");
+        let get_default = run("get(\"Rainbow\", 9, 0)\n").expect_err("get default should fail");
         assert!(get_default.message.contains("get default expected str"));
     }
 
@@ -4026,14 +4038,14 @@ append(third, 21)
 
     #[test]
     fn rejects_string_index_runtime_errors() {
-        let non_integer = run("\"Fyr\"[true]\n").expect_err("string index type should fail");
+        let non_integer = run("\"Rainbow\"[true]\n").expect_err("string index type should fail");
         assert!(non_integer.message.contains("string index expected i64"));
 
-        let negative = run("\"Fyr\"[-1]\n").expect_err("negative string index should fail");
+        let negative = run("\"Rainbow\"[-1]\n").expect_err("negative string index should fail");
         assert!(negative.message.contains("string index -1 out of bounds"));
 
-        let too_far = run("\"Fyr\"[3]\n").expect_err("oversized string index should fail");
-        assert!(too_far.message.contains("string index 3 out of bounds"));
+        let too_far = run("\"Rainbow\"[7]\n").expect_err("oversized string index should fail");
+        assert!(too_far.message.contains("string index 7 out of bounds"));
 
         let collection = run("42[0]\n").expect_err("indexing primitive should fail");
         assert!(
@@ -4049,7 +4061,7 @@ append(third, 21)
         assert!(transform.message.contains("trim expected str"));
 
         let predicate =
-            run("starts_with(\"Fyr\", 1)\n").expect_err("starts_with value should fail");
+            run("starts_with(\"Rainbow\", 1)\n").expect_err("starts_with value should fail");
         assert!(predicate.message.contains("starts_with value expected str"));
 
         let join_collection = run("join(42, \",\")\n").expect_err("join collection should fail");
@@ -4058,7 +4070,8 @@ append(third, 21)
         let join_item = run("join([1], \",\")\n").expect_err("join item should fail");
         assert!(join_item.message.contains("join expected [str]"));
 
-        let split_empty = run("split(\"Fyr\", \"\")\n").expect_err("split separator should fail");
+        let split_empty =
+            run("split(\"Rainbow\", \"\")\n").expect_err("split separator should fail");
         assert!(
             split_empty
                 .message
@@ -4066,7 +4079,7 @@ append(third, 21)
         );
 
         let replace_empty =
-            run("replace(\"Fyr\", \"\", \"-\")\n").expect_err("replace old should fail");
+            run("replace(\"Rainbow\", \"\", \"-\")\n").expect_err("replace old should fail");
         assert!(
             replace_empty
                 .message

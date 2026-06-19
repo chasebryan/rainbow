@@ -1,4 +1,4 @@
-use crate::diagnostic::{FyrError, FyrResult};
+use crate::diagnostic::{RainbowError, RainbowResult};
 use crate::span::Span;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +35,7 @@ pub enum TokenKind {
     Break,
     Continue,
     Struct,
+    Then,
     Enum,
     Arrow,
     Plus,
@@ -63,10 +64,9 @@ pub enum TokenKind {
     GreaterEqual,
     AndAnd,
     OrOr,
-    PipeForward,
 }
 
-pub fn lex(source: &str) -> FyrResult<Vec<Token>> {
+pub fn lex(source: &str) -> RainbowResult<Vec<Token>> {
     Lexer::new(source).lex()
 }
 
@@ -93,7 +93,7 @@ impl Lexer {
         }
     }
 
-    fn lex(mut self) -> FyrResult<Vec<Token>> {
+    fn lex(mut self) -> RainbowResult<Vec<Token>> {
         while !self.is_at_end() {
             if self.at_line_start {
                 self.handle_line_start()?;
@@ -140,12 +140,14 @@ impl Lexer {
                 '>' => self.simple(TokenKind::Greater, span),
                 '&' if self.match_char('&') => self.simple(TokenKind::AndAnd, span),
                 '|' if self.match_char('|') => self.simple(TokenKind::OrOr, span),
-                '|' if self.match_char('>') => self.simple(TokenKind::PipeForward, span),
                 '"' => self.string(span)?,
                 ch if ch.is_ascii_digit() => self.number(ch, span)?,
                 ch if is_identifier_start(ch) => self.identifier(ch, span),
                 ch => {
-                    return Err(FyrError::new(format!("unexpected character '{ch}'"), span));
+                    return Err(RainbowError::new(
+                        format!("unexpected character '{ch}'"),
+                        span,
+                    ));
                 }
             }
 
@@ -212,7 +214,7 @@ impl Lexer {
         self.tokens.push(Token { kind, span });
     }
 
-    fn handle_line_start(&mut self) -> FyrResult<()> {
+    fn handle_line_start(&mut self) -> RainbowResult<()> {
         let line = self.line;
         let mut indent = 0;
 
@@ -281,7 +283,7 @@ impl Lexer {
                     .last()
                     .expect("indent stack is never empty")
             {
-                return Err(FyrError::new("inconsistent indentation", span));
+                return Err(RainbowError::new("inconsistent indentation", span));
             }
         }
 
@@ -298,7 +300,7 @@ impl Lexer {
         }
     }
 
-    fn string(&mut self, start: Span) -> FyrResult<()> {
+    fn string(&mut self, start: Span) -> RainbowResult<()> {
         let mut value = String::new();
 
         while let Some(ch) = self.peek() {
@@ -316,7 +318,7 @@ impl Lexer {
                     value.push(self.escape_sequence(start)?);
                 }
                 '\n' => {
-                    return Err(FyrError::new("unterminated string literal", start));
+                    return Err(RainbowError::new("unterminated string literal", start));
                 }
                 ch => {
                     self.advance();
@@ -325,12 +327,12 @@ impl Lexer {
             }
         }
 
-        Err(FyrError::new("unterminated string literal", start))
+        Err(RainbowError::new("unterminated string literal", start))
     }
 
-    fn escape_sequence(&mut self, start: Span) -> FyrResult<char> {
+    fn escape_sequence(&mut self, start: Span) -> RainbowResult<char> {
         let Some(ch) = self.peek() else {
-            return Err(FyrError::new("unterminated escape sequence", start));
+            return Err(RainbowError::new("unterminated escape sequence", start));
         };
         self.advance();
 
@@ -340,14 +342,14 @@ impl Lexer {
             't' => Ok('\t'),
             '"' => Ok('"'),
             '\\' => Ok('\\'),
-            other => Err(FyrError::new(
+            other => Err(RainbowError::new(
                 format!("unknown escape sequence '\\{other}'"),
                 start,
             )),
         }
     }
 
-    fn number(&mut self, first: char, start: Span) -> FyrResult<()> {
+    fn number(&mut self, first: char, start: Span) -> RainbowResult<()> {
         let mut raw = String::from(first);
 
         while let Some(ch) = self.peek() {
@@ -372,9 +374,9 @@ impl Lexer {
 
             let value = raw
                 .parse::<f64>()
-                .map_err(|_| FyrError::new("float literal is invalid", start))?;
+                .map_err(|_| RainbowError::new("float literal is invalid", start))?;
             if !value.is_finite() {
-                return Err(FyrError::new("float literal must be finite", start));
+                return Err(RainbowError::new("float literal must be finite", start));
             }
 
             self.tokens.push(Token {
@@ -386,7 +388,7 @@ impl Lexer {
 
         let value = raw
             .parse::<i64>()
-            .map_err(|_| FyrError::new("integer literal is too large", start))?;
+            .map_err(|_| RainbowError::new("integer literal is too large", start))?;
 
         self.tokens.push(Token {
             kind: TokenKind::Int(value),
@@ -426,6 +428,7 @@ impl Lexer {
             "or" => TokenKind::OrOr,
             "return" => TokenKind::Return,
             "struct" => TokenKind::Struct,
+            "then" => TokenKind::Then,
             "true" => TokenKind::True,
             "var" => TokenKind::Var,
             "while" => TokenKind::While,
@@ -451,7 +454,7 @@ mod tests {
     #[test]
     fn lexes_keywords_and_operators() {
         let tokens = lex(
-            "fn ok(value: bool) -> bool:\n    let ready = value && false\n    ready |> print\n",
+            "fn ok(value: bool) -> bool:\n    let ready = value && false\n    ready then print\n",
         )
         .expect("lexing should pass");
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
@@ -479,7 +482,7 @@ mod tests {
                 TokenKind::False,
                 TokenKind::Newline,
                 TokenKind::Identifier("ready".to_owned()),
-                TokenKind::PipeForward,
+                TokenKind::Then,
                 TokenKind::Identifier("print".to_owned()),
                 TokenKind::Newline,
                 TokenKind::Dedent,
@@ -507,14 +510,14 @@ mod tests {
 
     #[test]
     fn lexes_import_keyword() {
-        let tokens = lex("import \"lib.fyr\"\n").expect("lexing should pass");
+        let tokens = lex("import \"lib.rain\"\n").expect("lexing should pass");
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
 
         assert_eq!(
             kinds,
             vec![
                 TokenKind::Import,
-                TokenKind::Str("lib.fyr".to_owned()),
+                TokenKind::Str("lib.rain".to_owned()),
                 TokenKind::Newline,
                 TokenKind::Eof,
             ]
@@ -599,7 +602,7 @@ mod tests {
 
     #[test]
     fn rejects_unterminated_strings() {
-        let error = lex("\"fyr").expect_err("unterminated string should fail");
+        let error = lex("\"rainbow").expect_err("unterminated string should fail");
 
         assert!(error.message.contains("unterminated"));
     }

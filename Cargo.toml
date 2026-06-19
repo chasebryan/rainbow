@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/fyr"]
+members = ["crates/rainbow"]
 resolver = "3"
 
 [workspace.package]

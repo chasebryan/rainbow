@@ -8,18 +8,18 @@ pub mod repl;
 pub mod span;
 pub mod typecheck;
 
-pub use diagnostic::{FyrError, FyrResult};
+pub use diagnostic::{RainbowError, RainbowResult};
 pub use eval::{RunResult, Value};
 pub use format::format_source;
 
-pub fn check_source(source: &str) -> FyrResult<()> {
+pub fn check_source(source: &str) -> RainbowResult<()> {
     let tokens = lexer::lex(source)?;
     let program = parser::parse(&tokens)?;
     typecheck::check(&program)?;
     Ok(())
 }
 
-pub fn run_source(source: &str) -> FyrResult<RunResult> {
+pub fn run_source(source: &str) -> RainbowResult<RunResult> {
     let tokens = lexer::lex(source)?;
     let program = parser::parse(&tokens)?;
     typecheck::check(&program)?;

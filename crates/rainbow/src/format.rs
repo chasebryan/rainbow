@@ -1,13 +1,13 @@
 use crate::ast::{
     BinaryOp, Expr, IfLetPattern, MatchPattern, Param, Program, Statement, TypeName, UnaryOp,
 };
-use crate::diagnostic::FyrResult;
+use crate::diagnostic::RainbowResult;
 use crate::lexer;
 use crate::parser;
 
 const INDENT: &str = "    ";
 
-pub fn format_source(source: &str) -> FyrResult<String> {
+pub fn format_source(source: &str) -> RainbowResult<String> {
     let comments = CommentPlan::from_source(source);
     let tokens = lexer::lex(source)?;
     let program = parser::parse(&tokens)?;
@@ -395,13 +395,13 @@ impl Formatter {
                 }
                 self.output.push(')');
             }
-            Expr::Pipe {
+            Expr::Flow {
                 value,
                 callee,
                 args,
             } => {
                 self.expr_inline(value, expr_precedence(expr));
-                self.output.push_str(" |> ");
+                self.output.push_str(" then ");
                 self.output.push_str(callee);
                 if !args.is_empty() {
                     self.output.push('(');
@@ -511,7 +511,7 @@ fn type_name(ty: &TypeName) -> String {
 fn expr_precedence(expr: &Expr) -> u8 {
     match expr {
         Expr::If { .. } | Expr::IfLet { .. } | Expr::Match { .. } => 0,
-        Expr::Pipe { .. } => 2,
+        Expr::Flow { .. } => 2,
         Expr::Binary { op, .. } => binary_precedence(*op),
         Expr::Unary { .. } => 8,
         Expr::Call { .. }
@@ -775,9 +775,9 @@ print(values[0])
 
     #[test]
     fn formats_imports() {
-        let formatted = format_source("import   \"lib.fyr\"\n").expect("formatting should pass");
+        let formatted = format_source("import   \"lib.rain\"\n").expect("formatting should pass");
 
-        assert_eq!(formatted, "import \"lib.fyr\"\n");
+        assert_eq!(formatted, "import \"lib.rain\"\n");
     }
 
     #[test]
@@ -845,17 +845,17 @@ let ratio:f64=3.140
     }
 
     #[test]
-    fn formats_pipeline_calls() {
+    fn formats_flow_calls() {
         let formatted = format_source(
             r#"
-let label="  Rainbow  "|>trim|>lower|>replace("rainbow","Rainbow")
+let label="  Rainbow  " then trim then lower then replace("rainbow","Rainbow")
 "#,
         )
         .expect("formatting should pass");
 
         assert_eq!(
             formatted,
-            "let label = \"  Rainbow  \" |> trim |> lower |> replace(\"rainbow\", \"Rainbow\")\n"
+            "let label = \"  Rainbow  \" then trim then lower then replace(\"rainbow\", \"Rainbow\")\n"
         );
     }
 
@@ -919,7 +919,7 @@ elif let Result.Err(message)=result:
         let formatted = format_source(
             r#"
 # Greeting setup.
-let name="Fyr" # keep the language name
+let name="Rainbow" # keep the language name
 print(name)
 "#,
         )
@@ -927,7 +927,7 @@ print(name)
 
         assert_eq!(
             formatted,
-            "# Greeting setup.\nlet name = \"Fyr\"  # keep the language name\nprint(name)\n"
+            "# Greeting setup.\nlet name = \"Rainbow\"  # keep the language name\nprint(name)\n"
         );
     }
 

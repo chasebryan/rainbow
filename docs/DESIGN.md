@@ -1,6 +1,6 @@
-# Rainbow Design Charter
+# Rainbow Design
 
-Rainbow is a native systems language with five product constraints:
+Rainbow is a native language project with five constraints:
 
 - C-class runtime performance
 - Rust-class memory and concurrency safety
@@ -8,7 +8,7 @@ Rainbow is a native systems language with five product constraints:
 - ML-class modeling through types and patterns
 - Smalltalk/Lisp-class interactive exploration without losing static rigor
 
-Rainbow studies the best ideas from many traditions and keeps only the ones that make programs safer, faster, clearer, or more beautiful. The hard north-star bar is tracked in [RAINBOW_NORTH_STAR.md](RAINBOW_NORTH_STAR.md), and the detailed synthesis map is tracked in [LANGUAGE_SYNTHESIS.md](LANGUAGE_SYNTHESIS.md).
+Rainbow studies the best ideas from other languages and keeps only the ones that make code safer, faster, clearer, or more pleasant to write.
 
 ## Safety Model
 
@@ -27,7 +27,7 @@ Unsafe Rainbow will exist, but it must be explicit, narrow, and auditable.
 
 Rainbow should favor readable, low-noise syntax:
 
-```fyr
+```rainbow
 fn fib(n: i64) -> i64:
     if n < 2:
         n
@@ -35,19 +35,19 @@ fn fib(n: i64) -> i64:
         fib(n - 1) + fib(n - 2)
 ```
 
-The bootstrap implementation now supports typed function signatures, local function declarations after the declaration point, optional binding annotations, nominal structs with field access, unit and payload enums for closed state/data sets, exhaustive enum `match` expressions with payload bindings, enum-pattern `if let` branches, value equality for data, explicit `nil` with nullable `T?` types, scoped `if let` nullable unwrapping, homogeneous arrays with checked append, reverse, first/last reads, indexing, fallback reads, search/count helpers, slicing, and emptiness checks, checked integer arithmetic, finite `f64` arithmetic, concatenation, containment checks, and iteration, string containment, checked indexing, character iteration, split/join, trim/case helpers, prefix/suffix checks, replacement, reverse, first/last reads, fallback reads, search/count helpers, slicing, and emptiness checks, readable boolean operators, relative file imports, end-exclusive `range` loops, explicit mutable `var` bindings, static checks for calls and primitive operations, declaration hygiene for same-scope bindings, function parameters, struct fields, and enum variants, Python-style indented blocks, statement-style `if` / `elif` / `else` blocks, expression-style `if` / `elif` / `else` / `match` branches, `while` loops, explicit `return` / `break` / `continue` exits, a persistent REPL with load/history/reset commands, project scaffolding with `fyr.toml`, checked import-flattened bootstrap build artifacts, and comment-preserving `fyr fmt` formatting checks/writes. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
+The bootstrap implementation now supports typed function signatures, local function declarations after the declaration point, optional binding annotations, nominal structs with field access, unit and payload enums for closed state/data sets, exhaustive enum `match` expressions with payload bindings, enum-pattern `if let` branches, value equality for data, explicit `nil` with nullable `T?` types, scoped `if let` nullable unwrapping, homogeneous arrays with checked append, reverse, first/last reads, indexing, fallback reads, search/count helpers, slicing, and emptiness checks, checked integer arithmetic, finite `f64` arithmetic, concatenation, containment checks, and iteration, string containment, checked indexing, character iteration, split/join, trim/case helpers, prefix/suffix checks, replacement, reverse, first/last reads, fallback reads, search/count helpers, slicing, and emptiness checks, readable boolean operators, relative file imports, end-exclusive `range` loops, explicit mutable `var` bindings, static checks for calls and primitive operations, declaration hygiene for same-scope bindings, function parameters, struct fields, and enum variants, Python-style indented blocks, statement-style `if` / `elif` / `else` blocks, expression-style `if` / `elif` / `else` / `match` branches, `while` loops, explicit `return` / `break` / `continue` exits, a persistent REPL with load/history/reset commands, project scaffolding with `rainbow.toml`, checked import-flattened bootstrap build artifacts, and comment-preserving `rainbow fmt` formatting checks/writes. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
 
-Pipeline calls provide the first small Ruby/Elixir/F# inspired readability feature:
+Flow calls keep transformations readable from left to right:
 
-```fyr
-let label = "  Rainbow  " |> trim |> lower |> replace("rainbow", "Rainbow")
+```rainbow
+let label = "  Rainbow  " then trim then lower then replace("rainbow", "Rainbow")
 ```
 
-`value |> function` is checked and evaluated as `function(value)`. `value |> function(extra, args)` is checked and evaluated as `function(value, extra, args)`. It is call syntax, not a dynamic dispatch escape hatch.
+`value then function` is checked and evaluated as `function(value)`. `value then function(extra, args)` is checked and evaluated as `function(value, extra, args)`.
 
 Closed state and result-like data sets use unit and payload enums:
 
-```fyr
+```rainbow
 enum Status:
     Pending
     Ready
@@ -68,14 +68,14 @@ Variants are nominal values and can be compared, stored in homogeneous arrays, a
 
 Single-variant branches can use the same pattern shape:
 
-```fyr
+```rainbow
 if let Status.Failed(message) = status:
     print(message)
 ```
 
 Numeric types are explicit:
 
-```fyr
+```rainbow
 let count: i64 = 4
 let ratio: f64 = 3.14
 let total: f64 = f64(count) + ratio
@@ -85,7 +85,7 @@ let total: f64 = f64(count) + ratio
 
 Nullable values use postfix `?` syntax:
 
-```fyr
+```rainbow
 let missing: i64? = nil
 let values: [i64?] = [nil, 42]
 let recovered: i64 = missing ?? 0
@@ -96,34 +96,34 @@ if let value = values[1]:
 
 Plain `T` values can flow into `T?`, and `nil` can only flow into nullable destinations. Flowing a `T?` directly back into `T` remains rejected. Use the `??` coalescing operator to provide a fallback and recover the inner `T` safely; the fallback is only evaluated when the left side is `nil`. Use `if let name = maybe:` to bind the inner value in a branch-local immutable name when the nullable value is present.
 
-## Toolchain Direction
+## Toolchain
 
-The `fyr` command should become the single daily entrypoint:
+The `rainbow` command is the daily entrypoint:
 
 ```sh
-fyr
-fyr new app
+rainbow
+rainbow new app
 cd app
-fyr run
-fyr check
-fyr fmt --check
-fyr test
-fyr build
-fyr run app.fyr
-fyr check src tests
-fyr fmt --check src tests
-fyr fmt src tests
-fyr build
-fyr test tests
+rainbow run
+rainbow check
+rainbow fmt --check
+rainbow test
+rainbow build
+rainbow run app.rain
+rainbow check src tests
+rainbow fmt --check src tests
+rainbow fmt src tests
+rainbow build
+rainbow test tests
 ```
 
 The first import form is intentionally direct:
 
-```fyr
-import "lib.fyr"
+```rainbow
+import "lib.rain"
 ```
 
-Imports are relative `.fyr` files resolved before checking and execution. The bootstrap command detects import cycles, deduplicates repeated imports for each root file, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, preserves statement source paths for typechecker and runtime fallback diagnostics after import flattening, and prints nearby source-line caret snippets when the source file is available. Project imports are confined to the nearest `fyr.toml` root. `fyr build` currently emits a checked, formatted Rainbow source bundle with imports flattened; native object/executable artifacts remain the later backend milestone.
+Imports are relative `.rain` files resolved before checking and execution. The bootstrap command detects import cycles, deduplicates repeated imports for each root file, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, preserves statement source paths for typechecker and runtime fallback diagnostics after import flattening, and prints nearby source-line caret snippets when the source file is available. Project imports are confined to the nearest `rainbow.toml` root. `rainbow build` currently emits a checked, formatted Rainbow source bundle with imports flattened; native object/executable artifacts remain the later backend milestone.
 
 The first implementation uses an interpreter. The planned native path is:
 

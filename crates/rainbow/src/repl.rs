@@ -2,7 +2,7 @@ use std::fs;
 use std::io::{self, Write};
 
 use crate::ast::{Program, Statement};
-use crate::diagnostic::FyrResult;
+use crate::diagnostic::RainbowResult;
 use crate::eval::{Evaluator, Value};
 use crate::lexer;
 use crate::parser;
@@ -19,7 +19,7 @@ enum ReplAction {
     Exit,
 }
 
-pub fn start() -> FyrResult<()> {
+pub fn start() -> RainbowResult<()> {
     let mut session = ReplSession::new();
     let stdin = io::stdin();
     let mut buffer = String::new();
@@ -31,7 +31,7 @@ pub fn start() -> FyrResult<()> {
 
     loop {
         if buffer.is_empty() {
-            print!("fyr> ");
+            print!("rainbow> ");
         } else {
             print!("... ");
         }
@@ -126,7 +126,11 @@ impl ReplSession {
         &self.typecheck_history
     }
 
-    pub fn eval_source(&mut self, source: &str, echo_expressions: bool) -> FyrResult<Vec<String>> {
+    pub fn eval_source(
+        &mut self,
+        source: &str,
+        echo_expressions: bool,
+    ) -> RainbowResult<Vec<String>> {
         let source = ensure_trailing_newline(source);
         let typecheck_source = format!("{}{source}", self.typecheck_history);
         let typecheck_program = parse_source(&typecheck_source)?;
@@ -217,7 +221,7 @@ fn print_lines(lines: Vec<String>) {
     }
 }
 
-fn parse_source(source: &str) -> FyrResult<Program> {
+fn parse_source(source: &str) -> RainbowResult<Program> {
     let tokens = lexer::lex(source)?;
     parser::parse(&tokens)
 }
@@ -341,8 +345,11 @@ fn double(value: i64) -> i64:
     #[test]
     fn load_command_runs_file_without_expression_echo() {
         let mut session = ReplSession::new();
-        let path =
-            std::env::temp_dir().join(format!("fyr_repl_load_{}_{}.fyr", process::id(), "smoke"));
+        let path = std::env::temp_dir().join(format!(
+            "rainbow_repl_load_{}_{}.rain",
+            process::id(),
+            "smoke"
+        ));
         fs::write(&path, "let answer = 40 + 2\nanswer\nprint(answer)\n")
             .expect("test source should write");
 
