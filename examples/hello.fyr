@@ -1,5 +1,5 @@
-# Fyr bootstrap example.
-let language = "Fyr"
+# Rainbow bootstrap example.
+let language = "Rainbow"
 let speed = 40 + 2
 print("Hello from " + language)
 print(speed)

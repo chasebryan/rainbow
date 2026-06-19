@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "The Fyr programming language toolchain."
+description = "The Rainbow programming language bootstrap toolchain."
 
 [lib]
 name = "fyr"
@@ -14,4 +14,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "fyr"
 path = "src/main.rs"
-

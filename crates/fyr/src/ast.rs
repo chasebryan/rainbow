@@ -338,6 +338,11 @@ pub enum Expr {
         callee: String,
         args: Vec<Expr>,
     },
+    Pipe {
+        value: Box<Expr>,
+        callee: String,
+        args: Vec<Expr>,
+    },
     StructInit {
         name: String,
         fields: Vec<(String, Expr)>,
@@ -388,6 +393,12 @@ impl Expr {
                 right.set_source_path_recursive(path);
             }
             Expr::Call { args, .. } => {
+                for arg in args {
+                    arg.set_source_path_recursive(path);
+                }
+            }
+            Expr::Pipe { value, args, .. } => {
+                value.set_source_path_recursive(path);
                 for arg in args {
                     arg.set_source_path_recursive(path);
                 }

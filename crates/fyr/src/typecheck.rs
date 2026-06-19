@@ -407,6 +407,11 @@ impl Checker {
             }
             Expr::Binary { left, op, right } => self.check_binary(left, *op, right, expected),
             Expr::Call { callee, args } => self.check_call(callee, args, expected),
+            Expr::Pipe {
+                value,
+                callee,
+                args,
+            } => self.check_pipe(value, callee, args, expected),
             Expr::StructInit { name, fields } => self.check_struct_init(name, fields),
             Expr::EnumInit {
                 enum_name,
@@ -1191,6 +1196,19 @@ impl Checker {
                 Ok(*return_type)
             }
         }
+    }
+
+    fn check_pipe(
+        &mut self,
+        value: &Expr,
+        callee: &str,
+        args: &[Expr],
+        expected: Option<&Type>,
+    ) -> FyrResult<Type> {
+        let mut piped_args = Vec::with_capacity(args.len() + 1);
+        piped_args.push(value.clone());
+        piped_args.extend(args.iter().cloned());
+        self.check_call(callee, &piped_args, expected)
     }
 
     fn check_numeric_conversion(
@@ -2896,6 +2914,29 @@ assert(uppered == "FAST SECURE SIMPLE")
 "#,
         )
         .expect("string standard library should typecheck");
+    }
+
+    #[test]
+    fn accepts_pipeline_calls() {
+        typecheck(
+            r#"
+fn bracket(value: str, left: str, right: str) -> str:
+    return left + value + right
+
+let label: str = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
+let has_color: bool = label |> contains("rainbow")
+let size: i64 = label |> len
+"#,
+        )
+        .expect("pipeline calls should typecheck");
+    }
+
+    #[test]
+    fn rejects_pipeline_type_errors() {
+        let error =
+            typecheck("let value = 42 |> trim\n").expect_err("pipeline type error should fail");
+
+        assert!(error.message.contains("trim expected str"));
     }
 
     #[test]

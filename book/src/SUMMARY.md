@@ -1,4 +1,3 @@
 # Summary
 
-- [Welcome to Fyr](01-welcome.md)
-
+- [Welcome to Rainbow](01-welcome.md)

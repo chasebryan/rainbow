@@ -395,6 +395,25 @@ impl Formatter {
                 }
                 self.output.push(')');
             }
+            Expr::Pipe {
+                value,
+                callee,
+                args,
+            } => {
+                self.expr_inline(value, expr_precedence(expr));
+                self.output.push_str(" |> ");
+                self.output.push_str(callee);
+                if !args.is_empty() {
+                    self.output.push('(');
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            self.output.push_str(", ");
+                        }
+                        self.expr(arg, 0, 0);
+                    }
+                    self.output.push(')');
+                }
+            }
             Expr::StructInit { name, fields } => {
                 self.output.push_str(name);
                 self.output.push_str(" { ");
@@ -492,32 +511,33 @@ fn type_name(ty: &TypeName) -> String {
 fn expr_precedence(expr: &Expr) -> u8 {
     match expr {
         Expr::If { .. } | Expr::IfLet { .. } | Expr::Match { .. } => 0,
+        Expr::Pipe { .. } => 2,
         Expr::Binary { op, .. } => binary_precedence(*op),
-        Expr::Unary { .. } => 7,
+        Expr::Unary { .. } => 8,
         Expr::Call { .. }
         | Expr::StructInit { .. }
         | Expr::EnumInit { .. }
         | Expr::Field { .. }
-        | Expr::Index { .. } => 8,
+        | Expr::Index { .. } => 9,
         Expr::Int(_)
         | Expr::Float(_)
         | Expr::Bool(_)
         | Expr::Str(_)
         | Expr::Nil
         | Expr::Variable(_)
-        | Expr::Array(_) => 9,
+        | Expr::Array(_) => 10,
     }
 }
 
 fn binary_precedence(op: BinaryOp) -> u8 {
     match op {
         BinaryOp::Coalesce => 1,
-        BinaryOp::Or => 2,
-        BinaryOp::And => 3,
-        BinaryOp::Equal | BinaryOp::NotEqual => 4,
-        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 5,
-        BinaryOp::Add | BinaryOp::Subtract => 6,
-        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 7,
+        BinaryOp::Or => 3,
+        BinaryOp::And => 4,
+        BinaryOp::Equal | BinaryOp::NotEqual => 5,
+        BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => 6,
+        BinaryOp::Add | BinaryOp::Subtract => 7,
+        BinaryOp::Multiply | BinaryOp::Divide | BinaryOp::Remainder => 8,
     }
 }
 
@@ -821,6 +841,21 @@ let ratio:f64=3.140
         assert_eq!(
             formatted,
             "let maybe: i64? = nil\nlet values: [i64?] = [nil, 1]\nlet recovered = maybe ?? 10\nlet ratio: f64 = 3.14\n"
+        );
+    }
+
+    #[test]
+    fn formats_pipeline_calls() {
+        let formatted = format_source(
+            r#"
+let label="  Rainbow  "|>trim|>lower|>replace("rainbow","Rainbow")
+"#,
+        )
+        .expect("formatting should pass");
+
+        assert_eq!(
+            formatted,
+            "let label = \"  Rainbow  \" |> trim |> lower |> replace(\"rainbow\", \"Rainbow\")\n"
         );
     }
 

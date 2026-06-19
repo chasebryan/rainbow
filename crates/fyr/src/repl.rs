@@ -26,7 +26,7 @@ pub fn start() -> FyrResult<()> {
     let mut in_multiline = false;
     let mut saw_indented_line = false;
 
-    println!("Fyr 0.1.0 bootstrap REPL");
+    println!("Rainbow 0.1.0 bootstrap REPL");
     println!("Type :help for commands, :quit to exit.");
 
     loop {
@@ -164,7 +164,7 @@ impl ReplSession {
                 Some(Ok(ReplAction::Continue(vec!["session reset".to_owned()])))
             }
             ":history" => Some(Ok(ReplAction::Continue(self.history_lines()))),
-            ":load" => Some(Err(":load expects a Fyr source path".to_owned())),
+            ":load" => Some(Err(":load expects a Rainbow source path".to_owned())),
             command if command.starts_with(":load ") => Some(self.load_command(command)),
             command if command.starts_with(':') => Some(Err(format!(
                 "unknown REPL command '{command}'. Type :help for commands."
@@ -176,7 +176,7 @@ impl ReplSession {
     fn load_command(&mut self, command: &str) -> Result<ReplAction, String> {
         let path = command.trim_start_matches(":load").trim();
         if path.is_empty() {
-            return Err(":load expects a Fyr source path".to_owned());
+            return Err(":load expects a Rainbow source path".to_owned());
         }
 
         let source =
@@ -244,7 +244,7 @@ fn help_lines() -> Vec<String> {
         "  :quit, :q, exit   exit the REPL".to_owned(),
         "  :reset            clear bindings and history".to_owned(),
         "  :history          show accepted source".to_owned(),
-        "  :load <file>      run a Fyr file in this session".to_owned(),
+        "  :load <file>      run a Rainbow file in this session".to_owned(),
         "  let x = 42        bind a value".to_owned(),
         "  print(x)          print a value".to_owned(),
         "  blank line        submit a multi-line block".to_owned(),

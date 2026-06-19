@@ -1,14 +1,21 @@
-# Fyr
+# Rainbow
 
-Fyr is a new systems programming language aiming for native performance, strong safety, and a small, readable surface.
+Rainbow is a new systems programming language aiming for native performance, strong safety, and a beautiful, readable surface.
 
-The long-term goal is direct:
+The language goal is direct:
 
 - fast like C
 - secure like Rust
 - simple like Python
+- readable like Ruby
+- expressive like the best functional languages
+- friendly like the best interactive tools
 
-This repository begins with a working bootstrap: a Rust implementation of the `fyr` command, a tiny parser/evaluator, `fyr run`, `fyr check`, `fyr fmt`, and a terminal REPL.
+Rainbow is not trying to crown itself with a grand title. It is a coherent language effort that studies the best proven ideas from systems, functional, dynamic, data, and interactive programming while keeping programs visually calm. The concrete ambition is tracked in [docs/RAINBOW_NORTH_STAR.md](docs/RAINBOW_NORTH_STAR.md).
+
+This repository begins with a working bootstrap: a Rust implementation of the `fyr` command, a tiny parser/evaluator, `fyr run`, `fyr check`, `fyr fmt`, and a terminal REPL. The current command, manifest, and file extension are still named `fyr` until the toolchain rename is completed deliberately.
+
+Rainbow is made under the `chasebryan` name. The target repository is `https://github.com/chasebryan/rainbow`.
 
 ## Try It
 
@@ -21,6 +28,7 @@ cargo run -p fyr -- run examples/point.fyr
 cargo run -p fyr -- run examples/arrays.fyr
 cargo run -p fyr -- run examples/range.fyr
 cargo run -p fyr -- run examples/strings.fyr
+cargo run -p fyr -- run examples/pipeline.fyr
 cargo run -p fyr -- run examples/floats.fyr
 cargo run -p fyr -- run examples/nil.fyr
 cargo run -p fyr -- run examples/enums.fyr
@@ -30,6 +38,24 @@ cargo run -p fyr -- fmt --check examples
 cargo run -p fyr -- test examples
 cargo run -p fyr
 ```
+
+## Rainbow Charter
+
+Rainbow should be beautiful in the way a good proof, a good circuit, or a good sentence is beautiful: clear structure, low noise, precise meaning, and no hidden traps.
+
+The design test for every feature is whether it earns a color in the spectrum:
+
+- C and Zig: predictable native performance, explicit layout, and direct systems reach
+- Rust: memory safety, data-race prevention, algebraic data, and fearless refactoring
+- Python and Ruby: readable everyday code, fast feedback, and humane APIs
+- ML, Haskell, and F#: expressions, pattern matching, inference, and types that model truth
+- Lisp and Smalltalk: interactive development, language extension, and live exploration
+- Erlang, Elixir, Go, and Pony: practical concurrency, supervision, and isolated work
+- Swift, Kotlin, and TypeScript: modern tooling, helpful diagnostics, and productive application code
+- SQL, R, and Julia: first-class data work, numerics, and interactive analysis
+- Shell and Make: composable tools and honest build automation
+
+The hard performance/safety/readability bar lives in [docs/RAINBOW_NORTH_STAR.md](docs/RAINBOW_NORTH_STAR.md). The language synthesis map lives in [docs/LANGUAGE_SYNTHESIS.md](docs/LANGUAGE_SYNTHESIS.md).
 
 ## Install Locally
 
@@ -43,8 +69,8 @@ Then it can run from any path:
 
 ```sh
 fyr doctor
-fyr new hello-fyr
-cd hello-fyr
+fyr new hello-rainbow
+cd hello-rainbow
 fyr run
 fyr check
 fyr fmt --check
@@ -67,8 +93,8 @@ The bootstrap formatter writes files in place by default and checks without writ
 Create a project in a new directory:
 
 ```sh
-fyr new hello-fyr
-cd hello-fyr
+fyr new hello-rainbow
+cd hello-rainbow
 fyr run
 fyr check
 fyr test
@@ -83,10 +109,10 @@ fyr init
 fyr init tools/demo
 ```
 
-A Fyr project has a small `fyr.toml` manifest:
+A Rainbow project currently has a small `fyr.toml` manifest:
 
 ```toml
-name = "hello-fyr"
+name = "hello-rainbow"
 main = "src/main.fyr"
 ```
 
@@ -96,12 +122,12 @@ Split project code across files with relative imports:
 
 ```fyr
 import "lib.fyr"
-print(greeting("Fyr"))
+print(greeting("Rainbow"))
 ```
 
 Import paths are string literals that must be relative `.fyr` files. The CLI resolves imports before typechecking or running, detects cycles, and includes repeated imports once per root file. Missing or invalid import paths report the import statement that failed. Syntax and formatting errors include the file path that failed, including imported files; type and runtime errors fall back to the original source statement location, including imported statements. File-backed diagnostics include nearby source lines with a caret underline when the source is available. Inside a project, imports are confined to the nearest `fyr.toml` project root.
 
-Build a project into a checked, import-flattened Fyr bundle:
+Build a project into a checked, import-flattened Rainbow bundle:
 
 ```sh
 fyr build
@@ -109,14 +135,14 @@ fyr build --out dist/app.fyr
 fyr run build/main.fyr
 ```
 
-For a project, the default output is `build/main.fyr`. For a loose input file, `fyr build src/main.fyr` writes `src/main.bundle.fyr` unless `--out` is passed. This bootstrap build artifact is still Fyr source; native code generation remains a later compiler layer.
+For a project, the default output is `build/main.fyr`. For a loose input file, `fyr build src/main.fyr` writes `src/main.bundle.fyr` unless `--out` is passed. This bootstrap build artifact is still Rainbow source; native code generation remains a later compiler layer.
 
 Inside the REPL:
 
 ```fyr
 let answer = 40 + 2
 answer
-print("Fyr is alive")
+print("Rainbow is alive")
 ```
 
 The REPL keeps accepted bindings and declarations alive between submissions. It also has terminal commands for exploration:
@@ -129,7 +155,7 @@ The REPL keeps accepted bindings and declarations alive between submissions. It 
 :quit
 ```
 
-`:load` runs a Fyr source file inside the current session, which makes it useful for loading helpers and then experimenting with them interactively. Submitted chunks and loaded files predeclare their top-level functions before evaluating other statements, matching normal source-file behavior.
+`:load` runs a Rainbow source file inside the current session, which makes it useful for loading helpers and then experimenting with them interactively. Submitted chunks and loaded files predeclare their top-level functions before evaluating other statements, matching normal source-file behavior.
 
 Functions use typed signatures and Python-style indented bodies:
 
@@ -257,7 +283,7 @@ fn rebuild(text: str) -> str:
         rebuilt = rebuilt + ch
     return rebuilt
 
-let name = "Fyr"
+let name = "Rainbow"
 let phrase = "  Fast Secure Simple  "
 let cleaned = trim(phrase)
 let words = split(lower(cleaned), " ")
@@ -286,11 +312,11 @@ print(total)
 Bindings may include explicit annotations when clarity or an empty literal needs them:
 
 ```fyr
-let name: str = "Fyr"
+let name: str = "Rainbow"
 var scores: [i64] = []
 ```
 
-Assertions make Fyr files testable:
+Assertions make Rainbow files testable:
 
 ```fyr
 assert(sum([3, 5, 8, 13]) == 29, "sum should add every element")
@@ -305,24 +331,24 @@ assert(find([3, 5, 8], 8) == 2)
 assert(count([3, 5, 3, 8, 3], 3) == 3)
 assert(contains([3, 5, 8, 13], 8))
 assert(not contains([3, 5, 8, 13], 21) and contains([3, 5, 8, 13], 8))
-assert(contains("secure Fyr", "Fyr"))
-assert("Fyr"[0] == "F")
-assert("Fyr"[1] == "y")
-assert(trim("  Fyr  ") == "Fyr")
-assert(lower("FYR") == "fyr")
-assert(upper("fyr") == "FYR")
-assert(starts_with("Fyr", "F"))
-assert(ends_with("Fyr", "r"))
-assert(replace("Fast C", "C", "Fyr") == "Fast Fyr")
+assert(contains("beautiful Rainbow", "Rainbow"))
+assert("Rainbow"[0] == "R")
+assert("Rainbow"[1] == "a")
+assert(trim("  Rainbow  ") == "Rainbow")
+assert(lower("RAINBOW") == "rainbow")
+assert(upper("rainbow") == "RAINBOW")
+assert(starts_with("Rainbow", "R"))
+assert(ends_with("Rainbow", "w"))
+assert(replace("Fast C", "C", "Rainbow") == "Fast Rainbow")
 assert(split("fast secure simple", " ") == ["fast", "secure", "simple"])
 assert(join(["fast", "secure", "simple"], "-") == "fast-secure-simple")
-assert(slice("secure Fyr", 0, 6) == "secure")
-assert(get("Fyr", 1, "?") == "y")
-assert(reverse("Fyr") == "ryF")
-assert(first("Fyr", "?") == "F")
-assert(last("Fyr", "?") == "r")
-assert(find("secure Fyr", "Fyr") == 7)
-assert(count("secure Fyr secure", "secure") == 2)
+assert(slice("beautiful Rainbow", 0, 9) == "beautiful")
+assert(get("Rainbow", 1, "?") == "a")
+assert(reverse("Rainbow") == "wobniaR")
+assert(first("Rainbow", "?") == "R")
+assert(last("Rainbow", "?") == "w")
+assert(find("beautiful Rainbow", "Rainbow") == 10)
+assert(count("beautiful Rainbow beautiful", "beautiful") == 2)
 assert(is_empty(""))
 assert([1, 2, 3] == [1, 2, 3])
 assert(range(5)[4] == 4)
@@ -347,6 +373,7 @@ The bootstrap supports:
 - `nil` values with explicit nullable `T?` annotations, safe `value ?? fallback` coalescing, and scoped `if let value = maybe:` unwrapping
 - boolean `and`, `or`, and `not`, with `&&`, `||`, and `!` aliases
 - string concatenation with `+`
+- pipeline calls with `value |> function` and `value |> function(extra, args)` for readable left-to-right transformations
 - typed function signatures with Python-style indented bodies
 - recursive function calls and local function declarations after the declaration point
 - checked function calls and return types
@@ -363,7 +390,7 @@ The bootstrap supports:
 - a persistent terminal REPL with `:help`, `:load <file>`, `:history`, `:reset`, and `:quit`
 - `fyr init [dir]` and `fyr new <dir>` project scaffolding with `fyr.toml`, `src/main.fyr`, and `tests/main.fyr`
 - project-aware `fyr run`, `fyr check`, `fyr fmt`, and `fyr test` defaults when run below a `fyr.toml`
-- `fyr build [file]` checked, import-flattened Fyr bundle generation, with `--out <file>` for custom output
+- `fyr build [file]` checked, import-flattened Rainbow bundle generation, with `--out <file>` for custom output
 - `fyr fmt <path...>` in-place formatting and `fyr fmt --check <path...>` formatting checks
 - `fyr test <path...>` assertion-file execution
 - one-statement-per-line scripts
@@ -376,7 +403,7 @@ Bootstrap `range` materializes an array and currently caps each range at 1,000,0
 
 ## Direction
 
-Fyr will grow in stages:
+Rainbow will grow in stages:
 
 1. bootstrap interpreter and REPL
 2. expanded static type checker and inference
@@ -384,6 +411,6 @@ Fyr will grow in stages:
 4. native backend
 5. standard library
 6. package manager and build system
-7. the Fyr book
+7. the Rainbow book
 
 The repo should always keep a runnable language at the center. Design documents and book chapters should describe behavior that either exists or is actively being implemented.

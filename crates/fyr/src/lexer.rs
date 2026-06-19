@@ -63,6 +63,7 @@ pub enum TokenKind {
     GreaterEqual,
     AndAnd,
     OrOr,
+    PipeForward,
 }
 
 pub fn lex(source: &str) -> FyrResult<Vec<Token>> {
@@ -139,6 +140,7 @@ impl Lexer {
                 '>' => self.simple(TokenKind::Greater, span),
                 '&' if self.match_char('&') => self.simple(TokenKind::AndAnd, span),
                 '|' if self.match_char('|') => self.simple(TokenKind::OrOr, span),
+                '|' if self.match_char('>') => self.simple(TokenKind::PipeForward, span),
                 '"' => self.string(span)?,
                 ch if ch.is_ascii_digit() => self.number(ch, span)?,
                 ch if is_identifier_start(ch) => self.identifier(ch, span),
@@ -448,8 +450,10 @@ mod tests {
 
     #[test]
     fn lexes_keywords_and_operators() {
-        let tokens = lex("fn ok(value: bool) -> bool:\n    let ready = value && false\n")
-            .expect("lexing should pass");
+        let tokens = lex(
+            "fn ok(value: bool) -> bool:\n    let ready = value && false\n    ready |> print\n",
+        )
+        .expect("lexing should pass");
         let kinds: Vec<TokenKind> = tokens.into_iter().map(|token| token.kind).collect();
 
         assert_eq!(
@@ -473,6 +477,10 @@ mod tests {
                 TokenKind::Identifier("value".to_owned()),
                 TokenKind::AndAnd,
                 TokenKind::False,
+                TokenKind::Newline,
+                TokenKind::Identifier("ready".to_owned()),
+                TokenKind::PipeForward,
+                TokenKind::Identifier("print".to_owned()),
                 TokenKind::Newline,
                 TokenKind::Dedent,
                 TokenKind::Eof,

@@ -423,6 +423,11 @@ impl Evaluator {
             }
             Expr::Binary { left, op, right } => self.eval_binary(left, *op, right),
             Expr::Call { callee, args } => self.eval_call(callee, args),
+            Expr::Pipe {
+                value,
+                callee,
+                args,
+            } => self.eval_pipe(value, callee, args),
             Expr::StructInit { name, fields } => self.eval_struct_init(name, fields),
             Expr::EnumInit {
                 enum_name,
@@ -894,6 +899,13 @@ impl Evaluator {
             }
             other => self.eval_user_call(other, args),
         }
+    }
+
+    fn eval_pipe(&mut self, value: &Expr, callee: &str, args: &[Expr]) -> FyrResult<Flow> {
+        let mut piped_args = Vec::with_capacity(args.len() + 1);
+        piped_args.push(value.clone());
+        piped_args.extend(args.iter().cloned());
+        self.eval_call(callee, &piped_args)
     }
 
     fn eval_numeric_conversion(&mut self, name: &str, args: &[Expr]) -> FyrResult<Flow> {
@@ -3403,6 +3415,22 @@ assert(join([], ",") == "")
         .expect("string standard library should run");
 
         assert_eq!(result.last_value, Value::Unit);
+    }
+
+    #[test]
+    fn supports_pipeline_calls() {
+        let result = run(r#"
+fn bracket(value: str, left: str, right: str) -> str:
+    return left + value + right
+
+let label = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
+assert(label == "[rainbow]")
+assert((label |> contains("rainbow")))
+label |> len
+"#)
+        .expect("pipeline calls should run");
+
+        assert_eq!(result.last_value, Value::Int(9));
     }
 
     #[test]

@@ -1,6 +1,6 @@
-# Manifest-based Fyr project tests.
+# Manifest-based Rainbow project tests.
 import "../src/lib.fyr"
-assert(greeting("Fyr project") == "Hello from Fyr project")
-assert(reverse("Fyr") == "ryF")
+assert(greeting("Rainbow project") == "Hello from Rainbow project")
+assert(reverse("Rainbow") == "wobniaR")
 assert(split("fast secure simple", " ") == ["fast", "secure", "simple"])
 assert(join(["fast", "secure", "simple"], "-") == "fast-secure-simple")

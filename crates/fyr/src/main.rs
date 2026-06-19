@@ -209,30 +209,30 @@ fn init_project_at(root: &Path) -> Result<(), String> {
     )?;
     write_new_file(
         &main,
-        r#"# Fyr project entry point.
+        r#"# Rainbow project entry point.
 import "lib.fyr"
-print(greeting("Fyr"))
+print(greeting("Rainbow"))
 "#,
     )?;
     write_new_file(
         &lib,
-        r#"# Shared Fyr project code.
+        r#"# Shared Rainbow project code.
 fn greeting(name: str) -> str:
     return "Hello from " + name
 "#,
     )?;
     write_new_file(
         &test,
-        r#"# Fyr project smoke tests.
+        r#"# Rainbow project smoke tests.
 import "../src/lib.fyr"
-assert(greeting("Fyr") == "Hello from Fyr")
-assert(reverse("Fyr") == "ryF")
+assert(greeting("Rainbow") == "Hello from Rainbow")
+assert(reverse("Rainbow") == "wobniaR")
 assert(split("fast secure simple", " ") == ["fast", "secure", "simple"])
 assert(join(["fast", "secure", "simple"], "-") == "fast-secure-simple")
 "#,
     )?;
 
-    println!("created Fyr project at {}", root.display());
+    println!("created Rainbow project at {}", root.display());
     println!("  run:   fyr run");
     println!("  check: fyr check");
     println!("  test:  fyr test");
@@ -732,27 +732,27 @@ fn project_name(root: &Path) -> String {
 }
 
 fn print_help() {
-    println!("Fyr programming language bootstrap");
+    println!("Rainbow programming language bootstrap");
     println!();
     println!("Usage:");
     println!("  fyr              Start the REPL");
-    println!("  fyr <file.fyr>   Run a Fyr source file");
+    println!("  fyr <file.fyr>   Run a Rainbow source file");
     println!("  fyr repl         Start the REPL");
-    println!("  fyr init [dir]   Create a Fyr project in a directory");
-    println!("  fyr new <dir>    Create a Fyr project in a new directory");
-    println!("  fyr build [file] Build a checked, import-flattened Fyr bundle");
+    println!("  fyr init [dir]   Create a Rainbow project in a directory");
+    println!("  fyr new <dir>    Create a Rainbow project in a new directory");
+    println!("  fyr build [file] Build a checked, import-flattened Rainbow bundle");
     println!("  fyr build --out <file> [input] Write the bundle to a custom path");
-    println!("  fyr run [file]   Run a Fyr source file or project main");
-    println!("  fyr check [path...] Parse-check Fyr files, directories, or project");
-    println!("  fyr fmt [path...]   Format Fyr files, directories, or project");
-    println!("  fyr fmt --check [path...] Check Fyr formatting without writing");
-    println!("  fyr test [path...]  Run Fyr assertion files, directories, or project tests");
+    println!("  fyr run [file]   Run a Rainbow source file or project main");
+    println!("  fyr check [path...] Parse-check Rainbow files, directories, or project");
+    println!("  fyr fmt [path...]   Format Rainbow files, directories, or project");
+    println!("  fyr fmt --check [path...] Check Rainbow formatting without writing");
+    println!("  fyr test [path...]  Run Rainbow assertion files, directories, or project tests");
     println!("  fyr doctor       Show command/install diagnostics");
-    println!("  fyr version      Print the Fyr version");
+    println!("  fyr version      Print the Rainbow version");
     println!();
     println!("REPL commands:");
     println!("  :help            Show REPL help");
-    println!("  :load <file>     Run a Fyr file in the current REPL session");
+    println!("  :load <file>     Run a Rainbow file in the current REPL session");
     println!("  :history         Show accepted REPL source");
     println!("  :reset           Clear REPL bindings and history");
     println!("  :quit            Exit the REPL");
@@ -1368,7 +1368,7 @@ fn greeting(name: str) -> str:
             root.join("src/main.fyr"),
             r#"
 import "lib.fyr"
-print(greeting("Fyr"))
+print(greeting("Rainbow"))
 "#,
         )
         .expect("main should write");
@@ -1391,7 +1391,7 @@ print(greeting("Fyr"))
         let result = eval::Evaluator::new()
             .run(&program)
             .expect("bundle should run");
-        assert_eq!(result.outputs, vec!["Hello from Fyr"]);
+        assert_eq!(result.outputs, vec!["Hello from Rainbow"]);
 
         fs::remove_dir_all(root).expect("test project should clean up");
     }

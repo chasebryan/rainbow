@@ -4,7 +4,7 @@ fn rebuild(text: str) -> str:
     for ch in text:
         rebuilt = rebuilt + ch
     return rebuilt
-let name = "Fyr"
+let name = "Rainbow"
 let phrase = "  Fast Secure Simple  "
 let cleaned = trim(phrase)
 let words = split(lower(cleaned), " ")

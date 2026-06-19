@@ -1,14 +1,18 @@
-# Fyr Design Charter
+# Rainbow Design Charter
 
-Fyr is a native systems language with three product constraints:
+Rainbow is a native systems language with five product constraints:
 
 - C-class runtime performance
 - Rust-class memory and concurrency safety
 - Python-class readability for common code
+- ML-class modeling through types and patterns
+- Smalltalk/Lisp-class interactive exploration without losing static rigor
+
+Rainbow studies the best ideas from many traditions and keeps only the ones that make programs safer, faster, clearer, or more beautiful. The hard north-star bar is tracked in [RAINBOW_NORTH_STAR.md](RAINBOW_NORTH_STAR.md), and the detailed synthesis map is tracked in [LANGUAGE_SYNTHESIS.md](LANGUAGE_SYNTHESIS.md).
 
 ## Safety Model
 
-Safe Fyr should reject:
+Safe Rainbow should reject:
 
 - null dereferences
 - use-after-free
@@ -17,11 +21,11 @@ Safe Fyr should reject:
 - implicit lossy conversions
 - undefined behavior
 
-Unsafe Fyr will exist, but it must be explicit, narrow, and auditable.
+Unsafe Rainbow will exist, but it must be explicit, narrow, and auditable.
 
 ## Syntax Direction
 
-Fyr should favor readable, low-noise syntax:
+Rainbow should favor readable, low-noise syntax:
 
 ```fyr
 fn fib(n: i64) -> i64:
@@ -32,6 +36,14 @@ fn fib(n: i64) -> i64:
 ```
 
 The bootstrap implementation now supports typed function signatures, local function declarations after the declaration point, optional binding annotations, nominal structs with field access, unit and payload enums for closed state/data sets, exhaustive enum `match` expressions with payload bindings, enum-pattern `if let` branches, value equality for data, explicit `nil` with nullable `T?` types, scoped `if let` nullable unwrapping, homogeneous arrays with checked append, reverse, first/last reads, indexing, fallback reads, search/count helpers, slicing, and emptiness checks, checked integer arithmetic, finite `f64` arithmetic, concatenation, containment checks, and iteration, string containment, checked indexing, character iteration, split/join, trim/case helpers, prefix/suffix checks, replacement, reverse, first/last reads, fallback reads, search/count helpers, slicing, and emptiness checks, readable boolean operators, relative file imports, end-exclusive `range` loops, explicit mutable `var` bindings, static checks for calls and primitive operations, declaration hygiene for same-scope bindings, function parameters, struct fields, and enum variants, Python-style indented blocks, statement-style `if` / `elif` / `else` blocks, expression-style `if` / `elif` / `else` / `match` branches, `while` loops, explicit `return` / `break` / `continue` exits, a persistent REPL with load/history/reset commands, project scaffolding with `fyr.toml`, checked import-flattened bootstrap build artifacts, and comment-preserving `fyr fmt` formatting checks/writes. Fuller inference, ownership, and native code generation remain upcoming compiler layers.
+
+Pipeline calls provide the first small Ruby/Elixir/F# inspired readability feature:
+
+```fyr
+let label = "  Rainbow  " |> trim |> lower |> replace("rainbow", "Rainbow")
+```
+
+`value |> function` is checked and evaluated as `function(value)`. `value |> function(extra, args)` is checked and evaluated as `function(value, extra, args)`. It is call syntax, not a dynamic dispatch escape hatch.
 
 Closed state and result-like data sets use unit and payload enums:
 
@@ -111,7 +123,7 @@ The first import form is intentionally direct:
 import "lib.fyr"
 ```
 
-Imports are relative `.fyr` files resolved before checking and execution. The bootstrap command detects import cycles, deduplicates repeated imports for each root file, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, preserves statement source paths for typechecker and runtime fallback diagnostics after import flattening, and prints nearby source-line caret snippets when the source file is available. Project imports are confined to the nearest `fyr.toml` root. `fyr build` currently emits a checked, formatted Fyr source bundle with imports flattened; native object/executable artifacts remain the later backend milestone.
+Imports are relative `.fyr` files resolved before checking and execution. The bootstrap command detects import cycles, deduplicates repeated imports for each root file, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, preserves statement source paths for typechecker and runtime fallback diagnostics after import flattening, and prints nearby source-line caret snippets when the source file is available. Project imports are confined to the nearest `fyr.toml` root. `fyr build` currently emits a checked, formatted Rainbow source bundle with imports flattened; native object/executable artifacts remain the later backend milestone.
 
 The first implementation uses an interpreter. The planned native path is:
 
@@ -119,4 +131,4 @@ The first implementation uses an interpreter. The planned native path is:
 source -> tokens -> AST -> types -> safety IR -> optimization IR -> native backend
 ```
 
-Cranelift is the preferred early native backend because it gives Fyr fast native execution without making LLVM the first milestone.
+Cranelift is the preferred early native backend because it gives Rainbow fast native execution without making LLVM the first milestone.

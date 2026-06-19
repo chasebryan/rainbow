@@ -1,6 +1,8 @@
-# Welcome to Fyr
+# Welcome to Rainbow
 
-Fyr is a programming language for people who want native speed, strong safety, and code that stays readable under pressure.
+Rainbow is a programming language for people who want native speed, strong safety, and code that stays readable under pressure.
+
+The current bootstrap command is still named `fyr`, and source files still use the `.fyr` extension. The language identity is Rainbow; the toolchain rename is a later mechanical step.
 
 The first thing to learn is the terminal command:
 
@@ -25,13 +27,13 @@ Accepted bindings stay available until the session is reset or closed. The REPL 
 :quit
 ```
 
-`:load` runs a Fyr file in the current session, so you can load helpers and then keep experimenting. Top-level functions are predeclared inside each submitted chunk, matching normal source-file behavior.
+`:load` runs a Rainbow file in the current session, so you can load helpers and then keep experimenting. Top-level functions are predeclared inside each submitted chunk, matching normal source-file behavior.
 
 When you want a project instead of a loose file, create one:
 
 ```sh
-fyr new hello-fyr
-cd hello-fyr
+fyr new hello-rainbow
+cd hello-rainbow
 fyr run
 fyr check
 fyr test
@@ -39,10 +41,10 @@ fyr fmt --check
 fyr build
 ```
 
-The project manifest is `fyr.toml`:
+The Rainbow project manifest is `fyr.toml`:
 
 ```toml
-name = "hello-fyr"
+name = "hello-rainbow"
 main = "src/main.fyr"
 ```
 
@@ -52,21 +54,21 @@ Use imports when a project grows beyond one file:
 
 ```fyr
 import "lib.fyr"
-print(greeting("Fyr"))
+print(greeting("Rainbow"))
 ```
 
 Imports use relative `.fyr` paths. The command resolves imports before typechecking and running, catches import cycles, reports missing or invalid import paths at the import statement, reports syntax failures with the source file path, and keeps imported statement locations for type and runtime diagnostics. File-backed diagnostics also show nearby source lines with a caret underline. It only includes the same imported file once for each root file. Inside a project, imports stay inside the nearest `fyr.toml` project root.
 
-`fyr build` writes a checked, import-flattened Fyr source bundle:
+`fyr build` writes a checked, import-flattened Rainbow source bundle:
 
 ```sh
 fyr build
 fyr run build/main.fyr
 ```
 
-The bootstrap build output is still Fyr source. Later compiler stages will turn the same project shape toward native artifacts.
+The bootstrap build output is still Rainbow source. Later compiler stages will turn the same project shape toward native artifacts.
 
-Fyr functions use typed signatures and indented bodies:
+Rainbow functions use typed signatures and indented bodies:
 
 ```fyr
 fn fib(n: i64) -> i64:
@@ -111,7 +113,7 @@ let adjusted = f64(samples) + area
 print(area)
 ```
 
-Fyr keeps `i64` and `f64` separate for now; write the type you want instead of relying on implicit numeric widening. Use `f64(count)` to convert an integer to a decimal value, and `i64(score)` to recover a whole decimal value. Those conversions are checked so fractional values and precision-losing integers fail instead of silently changing shape.
+Rainbow keeps `i64` and `f64` separate for now; write the type you want instead of relying on implicit numeric widening. Use `f64(count)` to convert an integer to a decimal value, and `i64(score)` to recover a whole decimal value. Those conversions are checked so fractional values and precision-losing integers fail instead of silently changing shape.
 
 Use `nil` when a value can be absent, and mark that type with `?`:
 
@@ -132,7 +134,7 @@ else:
     print(0)
 ```
 
-Plain `i64` values can flow into `i64?`, but `i64?` cannot flow directly back into `i64`. Use `value ?? fallback` to recover a concrete value safely; Fyr only evaluates the fallback when the value is `nil`. Use `if let value = maybe:` when you want a scoped name for the present value; that name only exists inside the success branch.
+Plain `i64` values can flow into `i64?`, but `i64?` cannot flow directly back into `i64`. Use `value ?? fallback` to recover a concrete value safely; Rainbow only evaluates the fallback when the value is `nil`. Use `if let value = maybe:` when you want a scoped name for the present value; that name only exists inside the success branch.
 
 Functions can return early:
 
@@ -252,7 +254,7 @@ fn rebuild(text: str) -> str:
         rebuilt = rebuilt + ch
     return rebuilt
 
-let name = "Fyr"
+let name = "Rainbow"
 let phrase = "  Fast Secure Simple  "
 let cleaned = trim(phrase)
 let words = split(lower(cleaned), " ")
@@ -268,6 +270,16 @@ print(ends_with(cleaned, "Simple"))
 print(replace(cleaned, "Simple", "Readable"))
 ```
 
+Pipeline calls keep transformations readable from left to right. The value on the left becomes the first argument to the function on the right:
+
+```fyr
+fn bracket(value: str, left: str, right: str) -> str:
+    return left + value + right
+
+let label = "  Rainbow  " |> trim |> lower |> bracket("[", "]")
+print(label)
+```
+
 For counted loops, use `range`. The end is not included:
 
 ```fyr
@@ -278,14 +290,14 @@ for value in range(1, 11):
 print(total)
 ```
 
-Most bindings can be inferred. Add an annotation when it makes the program clearer or when Fyr cannot infer the type yet:
+Most bindings can be inferred. Add an annotation when it makes the program clearer or when Rainbow cannot infer the type yet:
 
 ```fyr
-let name: str = "Fyr"
+let name: str = "Rainbow"
 var scores: [i64] = []
 ```
 
-Assertions turn ordinary Fyr files into tests:
+Assertions turn ordinary Rainbow files into tests:
 
 ```fyr
 assert(range(5)[4] == 4)
@@ -300,24 +312,24 @@ assert(last([3, 5, 8], -1) == 8)
 assert(find([3, 5, 8], 8) == 2)
 assert(count([3, 5, 3, 8, 3], 3) == 3)
 assert(not contains([3, 5, 8, 13], 21))
-assert(contains("secure Fyr", "Fyr"))
-assert("Fyr"[0] == "F")
-assert("Fyr"[1] == "y")
-assert(trim("  Fyr  ") == "Fyr")
-assert(lower("FYR") == "fyr")
-assert(upper("fyr") == "FYR")
-assert(starts_with("Fyr", "F"))
-assert(ends_with("Fyr", "r"))
-assert(replace("Fast C", "C", "Fyr") == "Fast Fyr")
+assert(contains("beautiful Rainbow", "Rainbow"))
+assert("Rainbow"[0] == "R")
+assert("Rainbow"[1] == "a")
+assert(trim("  Rainbow  ") == "Rainbow")
+assert(lower("RAINBOW") == "rainbow")
+assert(upper("rainbow") == "RAINBOW")
+assert(starts_with("Rainbow", "R"))
+assert(ends_with("Rainbow", "w"))
+assert(replace("Fast C", "C", "Rainbow") == "Fast Rainbow")
 assert(split("fast secure simple", " ") == ["fast", "secure", "simple"])
 assert(join(["fast", "secure", "simple"], "-") == "fast-secure-simple")
-assert(slice("secure Fyr", 0, 6) == "secure")
-assert(get("Fyr", 1, "?") == "y")
-assert(reverse("Fyr") == "ryF")
-assert(first("Fyr", "?") == "F")
-assert(last("Fyr", "?") == "r")
-assert(find("secure Fyr", "Fyr") == 7)
-assert(count("secure Fyr secure", "secure") == 2)
+assert(slice("beautiful Rainbow", 0, 9) == "beautiful")
+assert(get("Rainbow", 1, "?") == "a")
+assert(reverse("Rainbow") == "wobniaR")
+assert(first("Rainbow", "?") == "R")
+assert(last("Rainbow", "?") == "w")
+assert(find("beautiful Rainbow", "Rainbow") == 10)
+assert(count("beautiful Rainbow beautiful", "beautiful") == 2)
 assert(is_empty(""))
 assert([1, 2, 3] == [1, 2, 3])
 assert(total == 55, "total should match the counted loop")
@@ -329,7 +341,7 @@ Run them with:
 fyr test examples
 ```
 
-Format Fyr files with:
+Format Rainbow files with:
 
 ```sh
 fyr fmt --check examples
@@ -338,4 +350,4 @@ fyr fmt examples
 
 When `fyr check`, `fyr fmt`, or `fyr test` receives a directory, it recursively finds `.fyr` files. The bootstrap formatter preserves line comments while canonicalizing spacing, indentation, and expression layout.
 
-The bootstrap version of Fyr is intentionally small. Each chapter of this book should track real language behavior as the compiler grows.
+The bootstrap version of Rainbow is intentionally small. Each chapter of this book should track real language behavior as the compiler grows.

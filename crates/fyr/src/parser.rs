@@ -763,7 +763,7 @@ impl<'a> Parser<'a> {
     }
 
     fn coalesce(&mut self) -> FyrResult<Expr> {
-        let expr = self.or()?;
+        let expr = self.pipeline()?;
 
         if self.match_kind(&TokenKind::QuestionQuestion) {
             let right = self.coalesce()?;
@@ -772,6 +772,43 @@ impl<'a> Parser<'a> {
                 op: BinaryOp::Coalesce,
                 right: Box::new(right),
             });
+        }
+
+        Ok(expr)
+    }
+
+    fn pipeline(&mut self) -> FyrResult<Expr> {
+        let mut expr = self.or()?;
+
+        while self.match_kind(&TokenKind::PipeForward) {
+            let callee = match &self.advance().kind {
+                TokenKind::Identifier(name) => name.clone(),
+                _ => {
+                    return Err(FyrError::new(
+                        "expected a function name after '|>'",
+                        self.previous().span,
+                    ));
+                }
+            };
+
+            let mut args = Vec::new();
+            if self.match_kind(&TokenKind::LParen) {
+                if !self.check(&TokenKind::RParen) {
+                    loop {
+                        args.push(self.expression()?);
+                        if !self.match_kind(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                }
+                self.consume(&TokenKind::RParen, "expected ')' after pipeline arguments")?;
+            }
+
+            expr = Expr::Pipe {
+                value: Box::new(expr),
+                callee,
+                args,
+            };
         }
 
         Ok(expr)
@@ -1230,6 +1267,35 @@ mod tests {
         };
 
         assert_eq!(*op, BinaryOp::Add);
+    }
+
+    #[test]
+    fn parses_pipeline_expressions() {
+        let tokens = lex("\"  Rainbow  \" |> trim |> lower\n").expect("lexing should pass");
+        let program = parse(&tokens).expect("parsing should pass");
+
+        let Statement::Expr {
+            expr:
+                Expr::Pipe {
+                    value,
+                    callee,
+                    args,
+                },
+            ..
+        } = &program.statements[0]
+        else {
+            panic!("expected pipeline expression");
+        };
+
+        assert_eq!(callee, "lower");
+        assert!(args.is_empty());
+        assert!(matches!(
+            value.as_ref(),
+            Expr::Pipe {
+                callee,
+                ..
+            } if callee == "trim"
+        ));
     }
 
     #[test]
